@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyAgent · 首次配置</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
+<style>
+  /* ═══ 与主界面 index.html 一致的设计系统 ═══ */
+  :root {
+    --space-bg: #1e1e2e;
+    --surface-glass: rgba(22, 22, 36, 0.96);
+    --surface-glass2: rgba(40, 40, 60, 0.94);
+    --surface-glass3: rgba(62, 63, 86, 0.78);
+    --border-glass: rgba(205, 214, 244, 0.055);
+    --border-accent: rgba(203, 166, 247, 0.22);
+    --text-primary: #cdd6f4;
+    --text-secondary: #a6adc8;
+    --text-tertiary: #6c7086;
+    --accent-gradient: linear-gradient(135deg, #b4befe 0%, #cba6f7 50%, #dac2f0 100%);
+    --accent-glow: rgba(203, 166, 247, 0.28);
+    --accent-brand-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%);
+    --accent-brand-glow: rgba(108, 92, 231, 0.28);
+    --shadow-brand-glow: 0 4px 24px rgba(108, 92, 231, 0.18);
+    --border-brand-accent: rgba(124, 111, 247, 0.22);
+    --green-accent: #a6e3a1;
+    --red-accent: #f38ba8;
+    --sans: 'Plus Jakarta Sans', -apple-system, system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --radius-sm: 8px;
+    --radius-md: 14px;
+    --radius-lg: 20px;
+    --shadow-soft: 0 10px 44px rgba(0,0,0,0.38);
+    --shadow-glow: 0 4px 24px rgba(203, 166, 247, 0.18);
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  :root.theme-light {
+    --space-bg: #e4e9f2;
+    --surface-glass: rgba(255, 255, 255, 0.93);
+    --surface-glass2: rgba(255, 255, 255, 0.98);
+    --surface-glass3: rgba(242, 245, 250, 0.96);
+    --border-glass: rgba(0, 0, 0, 0.09);
+    --border-accent: rgba(99, 102, 241, 0.38);
+    --text-primary: #0e0f1a;
+    --text-secondary: #282a3a;
+    --text-tertiary: #484a5e;
+    --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.1), 0 2px 10px rgba(0, 0, 0, 0.04);
+    --shadow-glow: 0 4px 22px rgba(99, 102, 241, 0.16);
+    --accent-glow: rgba(99, 102, 241, 0.18);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { font-size: 14px; background: var(--space-bg); }
+  body {
+    font-family: var(--sans);
+    background: var(--space-bg);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { width: 0; height: 0; display: none; }
+  :root.theme-light ::-webkit-scrollbar-thumb { background: rgba(15, 23, 42, 0.08); border-radius: 8px; }
+  :root.theme-light ::-webkit-scrollbar-thumb:hover,
+  :root.theme-light ::-webkit-scrollbar-thumb:active { background: rgba(15, 23, 42, 0.22); }
+
+  .bg-grid {
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(108, 92, 231, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(108, 92, 231, 0.04) 1px, transparent 1px);
+    background-size: 32px 32px;
+    z-index: 0;
+    pointer-events: none;
+  }
+  :root.theme-light .bg-grid {
+    background-image:
+      linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+  }
+  .bg-glow {
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(108, 92, 231, 0.12) 0%, transparent 55%);
+    z-index: 0;
+    pointer-events: none;
+  }
+  :root.theme-light .bg-glow {
+    background: radial-gradient(ellipse at 50% 0%, rgba(99, 102, 241, 0.08) 0%, transparent 58%);
+  }
+
+  .container {
+    position: relative; z-index: 1;
+    width: 100%; max-width: 520px;
+    padding: 1.25rem;
+    animation: fadeUp 0.55s var(--ease-out-expo);
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .card {
+    background: var(--surface-glass3);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-lg);
+    padding: 2.5rem 2rem 2rem;
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+    box-shadow: var(--shadow-soft);
+  }
+  :root.theme-light .card {
+    box-shadow: var(--shadow-soft), 0 1px 0 rgba(255,255,255,0.8) inset;
+  }
+
+  .logo { text-align: center; margin-bottom: 2rem; }
+  .logo-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-md);
+    background: var(--accent-brand-gradient);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.85rem;
+    box-shadow: 0 8px 28px var(--accent-brand-glow);
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .logo-icon svg {
+    width: 42px;
+    height: 34px;
+    display: block;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
+  }
+  .logo h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.25rem;
+    background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  :root.theme-light .logo h1 {
+    background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+  .logo p { color: var(--text-secondary); font-size: 0.88rem; font-weight: 500; }
+
+  .form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 0.85rem;
+    margin-bottom: 1.1rem;
+    align-items: start;
+  }
+  .form-row-2 .form-group { margin-bottom: 0; }
+  .form-row-search-pair.search-key-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .form-row-search-pair.search-key-collapsed #searchKeyGroup {
+    display: none;
+  }
+  .model-hint-below {
+    margin-bottom: 1.1rem;
+    margin-top: -0.35rem;
+  }
+  @media (max-width: 480px) {
+    .form-row-2 { grid-template-columns: 1fr; gap: 0; }
+    .form-row-2 .form-group:first-child { margin-bottom: 1.1rem; }
+    .form-row-search-pair.search-key-collapsed .form-group:first-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .form-group { margin-bottom: 1.1rem; }
+  .form-group label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.02em;
+  }
+  .form-group label .required { color: #9388fa; margin-left: 2px; }
+  :root.theme-light .form-group label .required { color: #6366f1; }
+
+  .form-group input,
+  .form-group select {
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    background: var(--surface-glass2);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    font-family: var(--sans);
+    outline: none;
+    transition: border-color 0.2s var(--ease-out-expo), box-shadow 0.2s var(--ease-out-expo);
+  }
+  :root.theme-light .form-group input,
+  :root.theme-light .form-group select {
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .form-group input:focus,
+  .form-group select:focus {
+    border-color: rgba(108, 92, 231, 0.45);
+    box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.12), var(--shadow-brand-glow);
+  }
+  :root.theme-light .form-group input:focus,
+  :root.theme-light .form-group select:focus {
+    border-color: rgba(99, 102, 241, 0.45);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.14);
+  }
+  .form-group input::placeholder { color: var(--text-tertiary); opacity: 0.65; }
+  .select-wrap {
+    position: relative;
+    display: block;
+  }
+  .select-wrap select {
+    cursor: pointer;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: none;
+    padding-right: 2rem;
+  }
+  .select-wrap select::-ms-expand { display: none; }
+  .select-wrap::after {
+    content: '';
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239898b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat center / contain;
+  }
+  :root.theme-light .select-wrap::after {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23484a5e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  }
+  .form-group select option {
+    background-color: var(--surface-glass2);
+    color: var(--text-primary);
+  }
+  :root.theme-light .form-group select option {
+    background-color: #fff;
+    color: var(--text-primary);
+  }
+
+  .form-hint {
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    margin-top: 0.3rem;
+    line-height: 1.45;
+  }
+  .form-hint a { color: #9388fa; text-decoration: none; font-weight: 500; }
+  .form-hint a:hover { text-decoration: underline; }
+  :root.theme-light .form-hint a { color: #4338ca; }
+
+  .btn {
+    width: 100%;
+    padding: 0.75rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.92rem;
+    font-weight: 700;
+    font-family: var(--sans);
+    cursor: pointer;
+    margin-top: 0.35rem;
+    transition: transform 0.25s var(--ease-out-expo), box-shadow 0.25s var(--ease-out-expo);
+  }
+  .btn-primary {
+    background: var(--accent-brand-gradient);
+    color: #fff;
+    box-shadow: 0 4px 18px rgba(108, 92, 231, 0.35);
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 26px rgba(108, 92, 231, 0.42);
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  .status {
+    display: none;
+    padding: 0.65rem 0.85rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    margin-bottom: 1rem;
+    text-align: center;
+    font-weight: 500;
+  }
+  .status.error {
+    display: block;
+    background: rgba(243,139,168,0.12);
+    border: 1px solid rgba(243,139,168,0.28);
+    color: var(--red-accent);
+  }
+  .status.success {
+    display: block;
+    background: rgba(166,227,161,0.12);
+    border: 1px solid rgba(166,227,161,0.26);
+    color: var(--green-accent);
+  }
+  :root.theme-light .status.error {
+    background: rgba(254,226,226,0.85);
+    border-color: rgba(243,139,168,0.35);
+    color: #991b1b;
+  }
+  :root.theme-light .status.success {
+    background: rgba(209,250,229,0.9);
+    border-color: rgba(166,227,161,0.35);
+    color: #065f46;
+  }
+
+  .wizard-status-help {
+    display: none;
+    margin-top: 8px;
+    margin-bottom: 14px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-align: center;
+    line-height: 1.45;
+  }
+  .wizard-status-help.is-visible { display: block; }
+
+  .footer {
+    text-align: center;
+    margin-top: 1.35rem;
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+  }
+  .footer-advanced-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    border-bottom: 1px dashed rgba(124, 111, 247, 0.45);
+    transition: color 0.18s, border-color 0.18s;
+    font-weight: 600;
+  }
+  .footer-advanced-link:hover {
+    color: #c7d2fe;
+    border-bottom-color: rgba(165,180,252,0.55);
+  }
+  :root.theme-light .footer-advanced-link:hover {
+    color: var(--text-primary);
+    border-bottom-color: rgba(99,102,241,0.45);
+  }
+
+  @media (max-width: 480px) {
+    .card { padding: 1.75rem 1.25rem 1.5rem; }
+  }
+</style>
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-glow" aria-hidden="true"></div>
+
+<div class="container">
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon" aria-hidden="true"><svg viewBox="0 0 40 32" fill="none" xmlns="http://www.w3.org/2000/svg"><text x="20" y="21" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="15" font-style="italic" fill="white" stroke="none" transform="rotate(-6 20 16)">Sugar</text></svg></div>
+      <h1>MyAgent</h1>
+      <p>首次配置向导</p>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="wizard-status-help" class="wizard-status-help" aria-live="polite">需要帮助请联系@wushuge 00612259</div>
+
+    <form id="configForm">
+      <div class="form-row-2">
+        <div class="form-group">
+          <label>LLM 供应商（支持OpenAI SDK） <span class="required">*</span></label>
+          <div class="select-wrap">
+          <select id="llmProvider">
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="local">本地模型 (Ollama/LM Studio)</option>
+          </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>模型名称 <span class="required">*</span></label>
+          <input type="text" id="modelName" placeholder="deepseek-v4-flash" autocomplete="off">
+        </div>
+      </div>
+      <div class="form-hint model-hint-below" id="modelHint">切换上方供应商时会自动填入推荐模型，也可自行修改。</div>
+
+      <div class="form-group" id="apiKeyGroup">
+        <label>API Key <span class="required">*</span></label>
+        <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+        <div class="form-hint">
+          DeepSeek: <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>
+          · OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
+        </div>
+      </div>
+
+      <div class="form-group" id="baseUrlGroup">
+        <label>API 地址</label>
+        <input type="text" id="baseUrl" placeholder="https://api.deepseek.com" autocomplete="off">
+      </div>
+
+      <div class="form-row-2">
+        <div class="form-group">
+          <label>上下文门限（tokens）</label>
+          <input type="text" id="contextWindow" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="128000">
+        </div>
+        <div class="form-group">
+          <label>单次回复上限（tokens）</label>
+          <input type="text" id="maxOutputTokens" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="8192">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>工作目录</label>
+        <input type="text" id="workDir" data-path-kind="directory" placeholder="./workspace" value="" autocomplete="off">
+      </div>
+
+      <div class="form-row-2 form-row-search-pair search-key-collapsed" id="searchPairRow">
+        <div class="form-group">
+          <label>联网搜索</label>
+          <div class="select-wrap">
+          <select id="searchProvider">
+            <option value="duckduckgo">DuckDuckGo（免费无需key，需配合VPN使用）</option>
+            <option value="tavily">Tavily（需 API Key）</option>
+          </select>
+          </div>
+        </div>
+        <div class="form-group" id="searchKeyGroup">
+          <label>API Key（Tavily）</label>
+          <input type="password" id="searchKey" placeholder="tvly-..." autocomplete="off">
+          <div class="form-hint">
+            <a href="https://app.tavily.com/home" target="_blank" rel="noopener">app.tavily.com</a> 获取免费 Key
+          </div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="submitBtn">
+        保存配置并启动
+      </button>
+    </form>
+
+    <div class="footer">
+      <a href="#" id="footer-advanced-link" class="footer-advanced-link">高级设置（与聊天共用命名窗口，可回到原标签）</a>
+      <div style="margin-top:8px;font-size:11px;color:var(--text-tertiary);">配置写入本地 .env；修改 WORK_DIR 后需重启服务生效。</div>
+      <div style="margin-top:6px;font-size:11px;color:var(--text-tertiary);">需要帮助请联系@wushuge 00612259</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const providerMap = {
+    deepseek: {
+      baseUrl: 'https://api.deepseek.com',
+      keyPlaceholder: 'sk-...',
+      keyHint: 'DeepSeek',
+      defaultModel: 'deepseek-v4-flash',
+      modelHint: 'DeepSeek 常用：deepseek-v4-flash、deepseek-v4-pro',
+    },
+    openai: {
+      baseUrl: 'https://api.openai.com/v1',
+      keyPlaceholder: 'sk-...',
+      keyHint: 'OpenAI',
+      defaultModel: 'gpt-4o',
+      modelHint: 'OpenAI 常用：gpt-4o、gpt-5.5',
+    },
+    local: {
+      baseUrl: 'http://localhost:11434/v1',
+      keyPlaceholder: 'not-needed',
+      keyHint: '本地模型',
+      defaultModel: 'llama3.2',
+      modelHint: '填写 Ollama 已拉取的模型名，如 llama3.2、qwen3.5',
+    },
+  };
+
+  const llmProvider = document.getElementById('llmProvider');
+  const baseUrl = document.getElementById('baseUrl');
+  const apiKey = document.getElementById('apiKey');
+  const apiKeyGroup = document.getElementById('apiKeyGroup');
+  const modelName = document.getElementById('modelName');
+  const modelHintEl = document.getElementById('modelHint');
+  const searchProvider = document.getElementById('searchProvider');
+  const searchKey = document.getElementById('searchKey');
+  const searchKeyGroup = document.getElementById('searchKeyGroup');
+  const searchPairRow = document.getElementById('searchPairRow');
+
+  function syncSearchPairVisibility() {
+    if (!searchPairRow || !searchKeyGroup) return;
+    var tav = searchProvider.value === 'tavily';
+    searchPairRow.classList.toggle('search-key-collapsed', !tav);
+  }
+  const status = document.getElementById('status');
+  const submitBtn = document.getElementById('submitBtn');
+  const workDirInput = document.getElementById('workDir');
+  if (workDirInput && typeof window.__DEFAULT_WORK_DIR__ === 'string' && window.__DEFAULT_WORK_DIR__) {
+    workDirInput.placeholder = window.__DEFAULT_WORK_DIR__ + '（或使用 ./workspace）';
+  }
+  const contextWindowEl = document.getElementById('contextWindow');
+  const maxOutputTokensEl = document.getElementById('maxOutputTokens');
+
+  let lastProvider = llmProvider.value;
+
+  function syncProviderUi(provider) {
+    const p = providerMap[provider];
+    if (!p) return;
+    apiKey.placeholder = p.keyPlaceholder;
+    modelHintEl.textContent = p.modelHint;
+    modelName.placeholder = p.defaultModel;
+    apiKeyGroup.style.display = provider === 'local' ? 'none' : 'block';
+  }
+
+  function applyProvider(provider, forceModel) {
+    const p = providerMap[provider];
+    if (!p) return;
+    syncProviderUi(provider);
+    const prevDef = providerMap[lastProvider] ? providerMap[lastProvider].defaultModel : '';
+    const cur = modelName.value.trim();
+    if (forceModel || !cur || (prevDef && cur === prevDef)) {
+      baseUrl.value = p.baseUrl;
+      modelName.value = p.defaultModel;
+    }
+    lastProvider = provider;
+  }
+
+  var prefill = window.__WIZARD_PREFILL__;
+  var hasPrefill = prefill && typeof prefill === 'object' && Object.keys(prefill).length > 0;
+
+  if (hasPrefill) {
+    if (prefill.llm_provider && providerMap[prefill.llm_provider]) {
+      llmProvider.value = prefill.llm_provider;
+    }
+    syncProviderUi(llmProvider.value);
+    lastProvider = llmProvider.value;
+    if (prefill.model_name) modelName.value = prefill.model_name;
+    if (prefill.llm_base_url) baseUrl.value = prefill.llm_base_url;
+    if (prefill.api_key !== undefined && prefill.api_key !== null) apiKey.value = prefill.api_key;
+    if (prefill.api_key_set) apiKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
+    if (prefill.work_dir && workDirInput) workDirInput.value = prefill.work_dir;
+    if (prefill.context_window && contextWindowEl) contextWindowEl.value = prefill.context_window;
+    if (prefill.max_output_tokens && maxOutputTokensEl) maxOutputTokensEl.value = prefill.max_output_tokens;
+    if (prefill.search_provider === 'tavily' || prefill.search_provider === 'duckduckgo') {
+      searchProvider.value = prefill.search_provider;
+    }
+    if (prefill.search_api_key) searchKey.value = prefill.search_api_key;
+    if (prefill.search_api_key_set) searchKey.placeholder = 'API已设置，如需修改请直接输入并保存设置';
+    var pSel = llmProvider.value;
+    var pm = providerMap[pSel];
+    if (pm) {
+      if (!modelName.value.trim()) modelName.value = pm.defaultModel;
+      if (!baseUrl.value.trim()) baseUrl.value = pm.baseUrl;
+    }
+  } else {
+    applyProvider(llmProvider.value, true);
+  }
+
+  syncSearchPairVisibility();
+
+  if (workDirInput && !workDirInput.value.trim()) workDirInput.value = './workspace';
+  if (contextWindowEl && !String(contextWindowEl.value).trim()) contextWindowEl.value = '128000';
+  if (maxOutputTokensEl && !String(maxOutputTokensEl.value).trim()) maxOutputTokensEl.value = '8192';
+
+  llmProvider.addEventListener('change', () => applyProvider(llmProvider.value, false));
+
+  searchProvider.addEventListener('change', syncSearchPairVisibility);
+
+  document.getElementById('configForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.className = 'status';
+    status.style.display = 'none';
+    var whClear = document.getElementById('wizard-status-help');
+    if (whClear) {
+      whClear.classList.remove('is-visible');
+      whClear.hidden = true;
+    }
+
+    const provider = llmProvider.value;
+    const key = apiKey.value.trim();
+    const url = baseUrl.value.trim();
+    const model = document.getElementById('modelName').value.trim();
+
+    if (!model) {
+      showStatus('请填写模型名称', 'error');
+      return;
+    }
+
+    if (provider !== 'local' && !key && !(prefill && prefill.api_key_set)) {
+      showStatus('请填写 API Key', 'error');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '正在保存...';
+
+    try {
+      const resp = await fetch('/api/save_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          llm_provider: provider,
+          llm_base_url: url || providerMap[provider].baseUrl,
+          api_key: key,
+          model_name: model,
+          work_dir: workDirInput ? workDirInput.value.trim() : '',
+          context_window: contextWindowEl ? contextWindowEl.value.trim() : '128000',
+          max_output_tokens: maxOutputTokensEl ? maxOutputTokensEl.value.trim() : '8192',
+          search_provider: searchProvider.value,
+          search_api_key: searchKey.value.trim(),
+        }),
+      });
+
+      const result = await resp.json();
+      if (result.ok) {
+        if (result.restart_required) {
+          showStatus('配置已保存；WORK_DIR 重启服务后生效。', 'success');
+          alert('WORK_DIR 已保存，重启服务后生效。');
+          setTimeout(() => { window.location.href = '/'; }, 1500);
+          return;
+        }
+        showStatus('✅ 配置已保存！正在启动 Agent...', 'success');
+        setTimeout(() => { window.location.href = '/'; }, 1500);
+      } else {
+        showStatus('❌ ' + (result.error || '保存失败'), 'error');
+      }
+    } catch (err) {
+      showStatus('⚠️ 配置服务器未启动，请手动编辑 .env 文件', 'error');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '保存配置并启动';
+    }
+  });
+
+  function showStatus(msg, type) {
+    status.textContent = msg;
+    status.className = 'status ' + type;
+    status.style.display = 'block';
+    var wh = document.getElementById('wizard-status-help');
+    if (wh) {
+      if (type === 'error') {
+        wh.hidden = false;
+        wh.classList.add('is-visible');
+      } else {
+        wh.hidden = true;
+        wh.classList.remove('is-visible');
+      }
+    }
+  }
+
+  var footerAdv = document.getElementById('footer-advanced-link');
+  if (footerAdv) {
+    footerAdv.addEventListener('click', function (e) {
+      e.preventDefault();
+      var w = window.open('/setup/env', 'myagent-env');
+      if (w) {
+        try { w.focus(); } catch (err) {}
+      } else {
+        window.location.href = '/setup/env';
+      }
+    });
+  }
+</script>
+</body>
+</html>

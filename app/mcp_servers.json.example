@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "servers": {
+    "fs_stdio": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "cwd": null,
+      "env": {}
+    },
+    "remote_sse_example": {
+      "transport": "sse",
+      "url": "https://example.com/your-mcp/sse",
+      "headers": {
+        "Authorization": "Bearer REPLACE_ME"
+      },
+      "timeout": 30,
+      "sse_read_timeout": 300
+    },
+    "remote_http_example": {
+      "transport": "streamable-http",
+      "url": "https://example.com/mcp",
+      "headers": {},
+      "timeout": 30,
+      "sse_read_timeout": 300,
+      "terminate_on_close": true
+    }
+  }
+}

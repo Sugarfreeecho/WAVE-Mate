@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>MyAgent · 智能会话</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+    <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"></script>
+  <script type="module" crossorigin src="/assets/index-DDTaXF03.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-BGjdRrsB.css">
+</head>
+<body>
+<div class="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar" aria-label="会话列表">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-line">
+                <div class="sidebar-brand-icon" aria-hidden="true"><svg viewBox="0 0 40 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="user-select:none;-webkit-user-select:none;pointer-events:none"><text x="20" y="21" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="15" font-style="italic" fill="white" stroke="none" transform="rotate(-6 20 16)">Sugar</text></svg></div>
+                <div class="sidebar-brand-copy">
+                    <div class="sidebar-brand-text">MyAgent</div>
+                    <div class="sidebar-brand-sub">智能会话平台</div>
+                </div>
+                <button type="button" id="sidebar-settings-btn" class="sidebar-settings-btn" aria-label="界面设置" data-ui-tip="界面设置">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div class="sidebar-new-chat-wrap">
+            <button id="new-session-btn" type="button" class="new-session-btn" data-ui-tip="新建会话">新建对话</button>
+        </div>
+        <div id="sessions-list" class="sessions-list" role="listbox"></div>
+    </aside>
+
+    <div class="sash" id="sash" role="separator" aria-orientation="vertical" aria-label="拖动调整侧栏宽度" tabindex="0"></div>
+
+    <!-- 主区域 -->
+    <section class="main" aria-label="聊天">
+        <div class="main-center">
+            <header class="titlebar">
+                <div class="breadcrumb">
+                    <span id="breadcrumb-text">选择或新建会话</span>
+                    <span id="breadcrumb-sub"></span>
+                </div>
+                <div class="titlebar-right">
+                    <button type="button" id="subagent-toggle-btn" class="subagent-toggle-btn hidden" aria-label="Subagent" aria-expanded="false" aria-controls="subagent-dock">
+                        Subagent
+                        <span id="subagent-toggle-badge" class="subagent-toggle-badge">0</span>
+                    </button>
+                    <div id="ctx-tokens" class="ctx-wrap" role="status" aria-live="polite">
+                        <div class="ctx-row">
+                            <span class="ctx-label">— / —</span>
+                            <span class="ctx-pct"></span>
+                        </div>
+                        <span class="ctx-bar" aria-hidden="true"><span class="ctx-fill"></span></span>
+                    </div>
+                </div>
+            </header>
+
+            <div class="workbench">
+                <div id="subagent-dock" class="subagent-dock hidden" aria-label="Subagent">
+                    <div class="subagent-panel">
+                        <div id="subagent-grid" class="subagent-grid"></div>
+                        <button type="button" id="subagent-dock-resize" class="subagent-dock-resize" aria-label="展开 Subagent 面板">
+                            <span class="subagent-dock-chevron" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="chat-stage">
+                    <aside id="chat-todo-plan" class="chat-todo-plan" aria-label="当前计划">
+                        <div class="chat-todo-plan-inner">
+                            <div class="chat-todo-plan-panel">
+                                <div class="chat-todo-plan-title">当前计划<button class="chat-todo-plan-close" type="button" aria-label="清除计划" data-ui-tip="清除当前计划" onclick="clearTodoPlan()">×</button></div>
+                                <div id="chat-todo-plan-stats" class="chat-todo-plan-stats" aria-live="polite"></div>
+                                <ul id="chat-todo-plan-list" class="chat-todo-plan-list"></ul>
+                            </div>
+                        </div>
+                    </aside>
+                    <div id="chat-container" class="chat-container">
+                        <div id="chat-stream" class="chat-stream" aria-label="消息"></div>
+                    </div>
+                    <aside id="chat-toc" class="chat-toc" aria-label="历史记录">
+                        <div class="chat-toc-inner">
+                            <div class="chat-toc-panel">
+                                <div class="chat-toc-title">历史记录</div>
+                                <nav id="chat-toc-list" class="chat-toc-list"></nav>
+                            </div>
+                        </div>
+                    </aside>
+                    <button type="button" class="panel-edge-handle todo-handle" id="todo-edge-tab" onclick="toggleTodoPlanPanel()" aria-label="折叠计划面板">▶</button>
+                    <button type="button" class="panel-edge-handle toc-handle" id="toc-edge-tab" onclick="toggleTocPanel()" aria-label="折叠历史面板">◀</button>
+                </div>
+            </div>
+
+            <div class="panel" role="form">
+                <div class="panel-inner">
+                    <div id="subagent-continue-banner" class="subagent-continue-banner hidden" role="status" aria-live="polite">
+                        <span class="subagent-continue-banner-msg"></span>
+                        <button type="button" id="subagent-continue-btn" class="subagent-continue-banner-btn">继续综合子任务</button>
+                        <button type="button" id="subagent-continue-dismiss" class="subagent-continue-dismiss" aria-label="关闭续接提示">×</button>
+                    </div>
+                    <div id="rewrite-undo-toast" class="rewrite-undo-toast" role="status" aria-live="polite">
+                        <span class="rewrite-undo-msg"></span>
+                        <button type="button" class="rewrite-undo-btn">撤销</button>
+                    </div>
+                    <div class="input-wrapper">
+                        <textarea id="message-input" rows="1" placeholder="说说你想做什么…" spellcheck="false" autocomplete="off"></textarea>
+                        <button type="button" id="pick-path-btn" class="path-browse-btn path-browse-btn--ghost" aria-label="选择文件" data-ui-tip="选择文件"></button>
+                        <button type="button" id="send-btn" data-ui-tip="发送 / 停止">发送</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="toast-host" aria-label="操作提示">
+                <div id="copy-toast" class="copy-toast" role="status" aria-live="polite">已复制</div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<div id="session-offscreen-buffers" class="session-offscreen-buffers" aria-hidden="true"></div>
+
+<div id="ui-modal-root" class="ui-modal-overlay" aria-hidden="true">
+    <div class="ui-modal" role="dialog" aria-modal="true" aria-labelledby="ui-modal-title" aria-describedby="ui-modal-desc" tabindex="-1">
+        <div class="ui-modal__head">
+            <div id="ui-modal-icon" class="ui-modal__icon ui-modal__icon--info" aria-hidden="true"></div>
+            <div class="ui-modal__titles">
+                <h2 id="ui-modal-title" class="ui-modal__title">提示</h2>
+                <p id="ui-modal-subtitle" class="ui-modal__subtitle"></p>
+            </div>
+        </div>
+        <p id="ui-modal-desc" class="ui-modal__body"></p>
+        <div class="ui-modal__actions">
+            <button type="button" class="ui-modal-btn ui-modal-btn--ghost" id="ui-modal-cancel">取消</button>
+            <button type="button" class="ui-modal-btn ui-modal-btn--primary" id="ui-modal-ok">确定</button>
+        </div>
+    </div>
+</div>
+
+<div id="settings-modal-root" class="settings-modal-overlay" aria-hidden="true">
+    <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" tabindex="-1">
+        <div class="settings-modal__head">
+            <h2 id="settings-modal-title" class="settings-modal__title">界面设置</h2>
+            <button type="button" id="settings-modal-close" class="settings-modal__close" aria-label="关闭">×</button>
+        </div>
+        <div class="settings-modal__body">
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">字体大小</div>
+                <div class="settings-font-row" role="group" aria-label="字体大小">
+                    <button type="button" id="settings-font-0" class="settings-font-step" aria-label="小号"><span class="settings-font-a settings-font-a--sm" aria-hidden="true">A</span></button>
+                    <button type="button" id="settings-font-1" class="settings-font-step" aria-label="标准"><span class="settings-font-a settings-font-a--md" aria-hidden="true">A</span></button>
+                    <button type="button" id="settings-font-2" class="settings-font-step" aria-label="大号"><span class="settings-font-a settings-font-a--lg" aria-hidden="true">A</span></button>
+                </div>
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">界面风格</div>
+                <div class="settings-theme-row" role="group" aria-label="界面风格">
+                    <button type="button" id="settings-theme-dark" class="settings-theme-btn">深色</button>
+                    <button type="button" id="settings-theme-light" class="settings-theme-btn">浅色（默认）</button>
+                </div>
+                <div class="settings-modal__label settings-modal__label--sub">会话目录风格</div>
+                <div class="settings-theme-row settings-session-mode-row" role="group" aria-label="会话目录显示模式">
+                    <button type="button" id="settings-session-compact" class="settings-theme-btn">紧凑</button>
+                    <button type="button" id="settings-session-detailed" class="settings-theme-btn">详细</button>
+                </div>
+            </div>
+            <div class="settings-modal__section">
+                <div class="settings-modal__label">环境与 API</div>
+                <button type="button" id="settings-env-advanced" class="settings-advanced-btn">高级设置</button>
+                <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">编辑完整 .env，保存后立即写回磁盘（部分项需重启服务）。</div>
+                <div style="margin-top:.45rem;color:var(--text-tertiary);font-size:0.72rem;line-height:1.45;">需要帮助请联系@wushuge 00612259</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

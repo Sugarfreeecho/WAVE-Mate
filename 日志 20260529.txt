@@ -1,0 +1,107 @@
+## 20260528.txt 问题修复状态全面检查报告
+
+经过对整个工程代码的系统性扫描，以下是所有修复项的落地情况：
+
+---
+
+### 📊 总览：35/37 项已完全落地，2 项部分落地
+
+---
+
+### A. 2026-05-27 批次（7 项）
+
+| # | 问题 | 状态 | 代码证据 |
+|---|------|------|---------|
+| A1 | Subagent小窗渲染（final位置+分批加载） | ✅ | `legacy-ui.js`：默认 `finalOnly` 模式，final 在顶部；向上滚动按 3 轮分批加载历史（`uo=3`） |
+| A2 | 小窗非user区域点击全屏 | ✅ | `.subagent-card-body` 点击事件检查非 `.msg-wrap--user` 后调用 `Pi(a,true)` 全屏；user 气泡点击仍为展开/收起子agent |
+| A3 | 路径自动展开不限制工作区 | ✅ | `agent_tools.py` `prepare_agent_workspace_path_literal()` 剥离引号后保留 Windows 磁盘路径原样，不做工作区限制 |
+| A4 | SUBAGENT_MAX_DEPTH=1 + subsubagent显示 | ✅ | `agent_harness.py:130` 默认值为 1；`agent_subagent.py:969` 强制深度检查；嵌套子agent事件通过 `_subagent_forward` 在同一父面板展示 |
+| A5 | 会话目录栏性能优化 | ⚠️ | `loadSessions()` 仍为全量DOM重建，**无虚拟滚动/防抖/增量diff**；Todo面板有 epoch 保护，但会话列表本身未优化 |
+| A6 | 压缩摘要继承优化 | ✅ | `agent_memory.py` 多轮压缩（最多3轮）+ 逐步收紧尾部窗口；key_context 采用覆盖制，旧摘要存入 `key_context_history.md` |
+| A7 | key_context累加→覆盖制 | ✅ | `agent_harness.py` `merge_compress_summary_into_key_context()` 只保留单个 `## 上下文摘要 · timestamp` 段，不累加 |
+
+---
+
+### B. 2026-05-28 批次（9 项）
+
+| # | 问题 | 状态 | 代码证据 |
+|---|------|------|---------|
+| B1 | 工具执行超时10分钟 + 进程树清理 | ✅ | `agent_tools.py:1060` `_kill_process_tree()` 用 `taskkill /PID /T /F`；超时错误**会作为工具结果返回给模型**，不中断agent |
+| B2 | 文件选择503（多后端fallback） | ✅ | `path_picker_util.py` 多后端：win32 COM → win32 ctypes → tkinter → zenity；前端 `myagent_path_picker.js` 修复了路径引号问题 |
+| B3 | key_context解析格式膨胀 | ✅ | 覆盖制（A7）+ `key_context_body_for_system_prompt()` 剥离 todo 计划并折叠三重换行 |
+| B4 | 空结果重试（FINAL_RESULT_RETRY_MAX） | ✅ | `agent_loop.py:707` 默认3次，兼容旧变量 `FINAL_EMPTY_RETRY_MAX`；适用于任何错误/空输出 |
+| B5 | 摘要格式不规范回退 | ✅ | `agent_memory.py:1014` 无效输出丢弃+重试（最多3轮），最终走 `compress_tail_fallback` 兜底 |
+| B6 | 子agent续接重复 | ✅ | `agent_harness.py` 用 `after_final_index` 锚定 + 分支 `created_at` 过滤 + `_actionable_pending_subagent_rows` 验证对齐 |
+| B7 | 工具条目流式命令显示 | ✅ | `agent_loop.py:387` SSE payload 含 `command_preview`；前端 `ao()` 函数处理增量命令流式展示 |
+| B8 | Tool Call前缀移除 | ✅ | `agent_tokenizer.py:40` 正则剥离 `"🔧 Tool Call:"` 前缀 |
+| B9 | Loop标记不传入模型上下文 | ✅ | `agent_harness.py:853` `_session_loop_marker_content()` 识别；`agent_tokenizer.py` 从模型输入和token计数中过滤 |
+
+---
+
+### C. API 兼容性（4 项）
+
+| # | 问题 | 状态 | 代码证据 |
+|---|------|------|---------|
+| C1 | MiMo usage字段兼容 | ✅ | `agent_openai.py:42` `extract_usage_dict()` 兼容平铺字段 + `prompt_tokens_details.cached_tokens` + `reasoning_tokens` |
+| C2 | reasoning字段兼容 | ✅ | `agent_openai.py:182` `_extract_reasoning_text()` 先读 `reasoning_content`，再 fallback `reasoning` |
+| C3 | GLM-4.7兼容 | ✅ | `agent_openai.py:311` `_is_glm_model()` 自动跳过 `extra_body`/`reasoning_effort`；usage在任意chunk位置都能正确提取 |
+| C4 | finish_reason/stop_reason记录 | ✅ | `agent_openai.py` `finish_meta` 字典同时记录两者，流式和非流式都兼容 |
+
+---
+
+### D. Subagent 重构修复（6 项）
+
+| # | 问题 | 状态 | 代码证据 |
+|---|------|------|---------|
+| D1 | `_subagent_forward`事件污染修复 | ✅ | `agent_subagent_events.py:42` `should_persist_ui_event()` 对 `_subagent_forward=True` 返回 False，阻止写入父级 ui_events |
+| D2 | pending结果误清空修复 | ✅ | `agent_harness.py:1696` 锚定机制 + 分支时间戳过滤 + `_actionable_pending_subagent_rows` 只消费可操作行 |
+| D3 | 后台subagent双start修复 | ✅ | `agent_subagent.py` 通过 `tag_subagent_forward_event()` 标记 + 前端卡片存在性检查去重 |
+| D4 | 失败/中断写入pending通知 | ✅ | `agent_subagent.py:843-860` 所有终态（completed/failed/interrupted）都调用 `_append_parent_pending_result()` |
+| D5 | SUBAGENT_MAX_REACT_ITER默认100 | ✅ | `agent_harness.py:131` 默认 `"100"`，支持环境变量覆盖 |
+| D6 | write_file temporary参数 | ✅ | `agent_tools.py:1756` `temporary` 参数；`agent_loop.py:542` `_cleanup_temporary_write_files()` 在 validate_final 阶段软删除到 `.trash` |
+
+---
+
+### E. 其他功能（5 项）
+
+| # | 问题 | 状态 | 代码证据 |
+|---|------|------|---------|
+| E1 | 多模态支持 | ✅ | `read_image` 工具 + `agent_openai.py` 自动展开图片/音频/视频路径为多模态 content 数组 |
+| E2 | 前端相对子目录路径链接识别 | ⚠️ | 路径选择器存在，但**聊天消息中相对子目录路径（如 `dir/file.md`）的自动链接化正则**未明确找到 |
+| E3 | reasoning_content strip修复 | ✅ | `agent_harness.py:279` `strip_reasoning_for_api_request()`：有 tool_calls 时保留字段（设为 `""`），避免 MiMo/DeepSeek 400 错误 |
+| E4 | 多选文件 | ✅ | `path_picker_util.py:390` `multiple=True` 支持 tkinter 多选；`webui.py` `/api/pick-path` 返回 `{"paths": [...]}` |
+| E5 | 继续运行按钮 | ✅ | `webui.py:244` `react_can_continue` 字段；前端横幅区分 react/subagents 两种模式 |
+
+---
+
+### ⚠️ 未完全落地的 2 项
+
+**A5 会话目录栏性能优化**
+- 当前 `loadSessions()` 每次调用都全量重建DOM，无虚拟滚动或防抖机制
+- 删除、分支、创建会话时每个会话框等很久才刷新
+- **建议**：引入虚拟滚动（如仅渲染可视区域）或增量 diff 更新
+
+**E2 前端相对子目录路径自动链接化**
+- 路径选择器和文件打开功能已正常工作
+- 但聊天消息中 `dir/file.md` 这类相对路径的**自动变成可点击链接**的正则匹配未在打包后的前端代码中明确找到
+- **建议**：确认 `linkifyKnownExtRegex()` 正则是否覆盖了不以 `/` 开头的子目录路径模式
+
+---
+
+### 📝 关于重构方案（阶段1-7）
+
+你之前提出的 subagent 重构方案中，**阶段1（止血）的 4 个 bug 修复已全部落地**：
+- ✅ nested 事件污染过滤
+- ✅ pending 只消费 actionable rows
+- ✅ 双 subagent_start 去重
+- ✅ 失败/中断也写 pending
+
+**阶段2-7（抽层/增强）尚未实施**，但骨架已经比较扎实。如果需要，我可以帮你推进下一步重构。
+
+未完成部分：
+1.临时文件清理 (write_file)：write_file 工具已支持 temporary=true 参数。标记为临时的文件会在 ReAct 循环结束时由 _cleanup_temporary_write_files 自动移入 .trash。——prompt.md文件里的描述与tool schema对齐了吗？
+2.工具条目增强：SSE 新增了 command_preview，前端工具条目现在可以展示“命令预览 -> 执行中 -> 结果”。——为什么，在写入文件时写文件内容的时候不能确认已经开始工具调用了
+3.文件选择器功能：已修复路径按钮不生效的问题。但聊天输入框一次多选多个文件的功能尚未安全上线（代码中没有发现多选支持）。——在有的电脑上点不开文件选择的窗口
+4.ls({'path': ...}) 等调试信息泄露：日志中提到的类似调试字符串在后端核心逻辑中被过滤，但仍建议检查前端是否有未清理的调试代码。——你检查一下
+5.会话列表刷新性能:虽然优化了索引加载,但在频繁创建/删除会话时,左栏的全局刷新(refresh_sessions_index_from_disk）仍可能存在 I/O 瓶颈。——如何修改？以及还有哪些有UI瓶颈的地方
+6.Subagent 小窗分批渲染：主聊天有 history-load-older-btn (L878)，但 subagent 卡片内没有类似分页机制，只有 viewport 可见性触发的 queueSubagentCardBodyLoad（IntersectionObserver），不是"向上滚动加载更早轮次"
