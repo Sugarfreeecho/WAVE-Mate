@@ -846,9 +846,14 @@ function scrollToBottom() {
 
 // 滚动位置存储
 const LS_SCROLL_POSITION_PREFIX = 'myagent-scroll-';
+const LS_SCROLL_ANCHOR_PREFIX = 'myagent-scroll-anchor-';
 
 function getScrollPositionKey(sessionId) {
     return LS_SCROLL_POSITION_PREFIX + sessionId;
+}
+
+function getScrollAnchorKey(sessionId) {
+    return LS_SCROLL_ANCHOR_PREFIX + sessionId;
 }
 
 function saveScrollPosition(sessionId, scrollTop) {
@@ -856,6 +861,41 @@ function saveScrollPosition(sessionId, scrollTop) {
     try {
         localStorage.setItem(getScrollPositionKey(sessionId), String(Math.round(scrollTop)));
     } catch (e) { /* ignore */ }
+}
+
+function saveScrollAnchorPosition(sessionId) {
+    if (!chatContainer || !sessionId) return;
+    try {
+        if (isNearBottom(chatContainer, STREAM_CHAT_NEAR_BOTTOM_PX)) {
+            localStorage.removeItem(getScrollAnchorKey(sessionId));
+            return;
+        }
+        var rect = chatContainer.getBoundingClientRect();
+        var wraps = chatContainer.querySelectorAll('.msg-wrap--user[data-event-index]');
+        var best = null;
+        for (var i = 0; i < wraps.length; i += 1) {
+            var wr = wraps[i];
+            var ei = Number(wr.getAttribute('data-event-index'));
+            if (!Number.isFinite(ei)) continue;
+            var top = wr.getBoundingClientRect().top;
+            if (top <= rect.top + 8) best = ei;
+            else if (best == null) {
+                best = ei;
+                break;
+            }
+        }
+        if (best != null) localStorage.setItem(getScrollAnchorKey(sessionId), String(best));
+    } catch (e) { /* ignore */ }
+}
+
+function getSavedScrollAnchorPosition(sessionId) {
+    if (!sessionId) return null;
+    try {
+        var saved = localStorage.getItem(getScrollAnchorKey(sessionId));
+        if (saved == null || saved === '') return null;
+        var n = Number(saved);
+        return Number.isFinite(n) ? n : null;
+    } catch (e) { return null; }
 }
 
 function getSavedScrollPosition(sessionId) {
@@ -869,6 +909,7 @@ function getSavedScrollPosition(sessionId) {
 function saveChatScrollForSession(sid) {
     if (!chatContainer || !sid) return;
     saveScrollPosition(sid, chatContainer.scrollTop);
+    saveScrollAnchorPosition(sid);
 }
 
 function clampChatScrollTop(y) {
@@ -902,6 +943,16 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     }
     
     if (mode === 'saved-or-bottom') {
+        var savedAnchor = getSavedScrollAnchorPosition(sessionId);
+        if (savedAnchor != null && typeof scrollToUserTurnOrLoadOlder === 'function') {
+            requestAnimationFrame(function () {
+                if (sessionId === currentSessionId) void scrollToUserTurnOrLoadOlder(savedAnchor);
+            });
+            streamChatNearBottom = false;
+            streamProcNearBottom = true;
+            liveAutoFollow = false;
+            return;
+        }
         var savedPosition = getSavedScrollPosition(sessionId);
         if (savedPosition !== null && savedPosition > 0) {
             // 恢复保存的滚动位置
@@ -919,6 +970,13 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     liveAutoFollow = true;
     scrollToBottom();
 }
+
+window.addEventListener('beforeunload', function () {
+    saveChatScrollForSession(currentSessionId);
+});
+document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);
+});
 
 const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 44 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;user-select:none;-webkit-user-select:none;pointer-events:none"><text x="22" y="16" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="14" font-style="italic" fill="white" stroke="none" transform="rotate(-6 22 11)">Sugar</text></svg></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;
 

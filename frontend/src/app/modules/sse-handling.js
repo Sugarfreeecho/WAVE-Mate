@@ -195,6 +195,8 @@ async function attachSessionEventStream(sessionId) {
     var runCtx = null;
     try {
         if (runSessionId !== currentSessionId) return;
+        await loadSessionMessages(runSessionId, 'saved-or-bottom');
+        if (runSessionId !== currentSessionId) return;
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
