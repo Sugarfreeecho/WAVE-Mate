@@ -14,8 +14,6 @@ let inputPathRewriteGuard = false;
 /** 本会话最近一次成功点击「发送」的用户消息全文（供工具确认失败后「重新发送」） */
 const lastUserMessageBySession = Object.create(null);
 /** 离开会话时主列表 scrollTop，切回时恢复（本页内；首次进入该会话无记录则置底） */
-/** 服务端仍有 /chat 推流时 true，用于刷新后黄点与轮询补消息 */
-let serverStreamActiveBySession = Object.create(null);
 const LS_SESSION_SECTION_PREFIX = 'myagent-session-section-';
 let streamPollTimer = null;
 const messageRawMarkdown = new WeakMap();

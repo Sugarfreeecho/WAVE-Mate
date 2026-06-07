@@ -386,18 +386,16 @@ async function refreshSingleSessionRow(sessionId) {
 const sessionListCache = {
     data: null,
     timestamp: 0,
-    TTL: 30000, // 30秒缓存
+    // Compatibility shell; session snapshots are now fetched on every refresh.
+    TTL: 0,
     
     get() {
-        if (this.data && (Date.now() - this.timestamp) < this.TTL) {
-            return this.data;
-        }
         return null;
     },
     
     set(data) {
-        this.data = data;
-        this.timestamp = Date.now();
+        this.data = null;
+        this.timestamp = 0;
     },
     
     invalidate() {
@@ -458,39 +456,28 @@ async function loadSessions(opts) {
     const loadEpoch = ++sessionListLoadEpoch;
     sessionStore.ui.loadingSessions = true;
     try {
-        // 检查缓存
-        const cachedData = opts.force ? null : sessionListCache.get();
         let allSessions;
         let snapshot = null;
         
-        if (cachedData) {
-            // 使用缓存数据
-            allSessions = cachedData;
-        } else {
-            // 从服务器获取数据
-            try {
-                snapshot = await fetchSessionsStateSnapshot();
-                if (loadEpoch !== sessionListLoadEpoch) return;
-                allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
-            } catch (stateErr) {
-                console.error('加载会话状态快照失败，回退旧接口:', stateErr);
-                const response = await fetch('/sessions');
-                const archivedCountHeader = response.headers.get('X-Archived-Count');
-                if (archivedCountHeader != null && archivedCountHeader !== '') {
-                    const parsedArchivedCount = Number(archivedCountHeader);
-                    if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
-                        sessionStore.setArchivedCount(parsedArchivedCount);
-                        syncArchivedSessionStateFromStore();
-                    }
+        try {
+            snapshot = await fetchSessionsStateSnapshot();
+            if (loadEpoch !== sessionListLoadEpoch) return;
+            allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+        } catch (stateErr) {
+            console.error('加载会话状态快照失败，回退旧接口:', stateErr);
+            const response = await fetch('/sessions');
+            const archivedCountHeader = response.headers.get('X-Archived-Count');
+            if (archivedCountHeader != null && archivedCountHeader !== '') {
+                const parsedArchivedCount = Number(archivedCountHeader);
+                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
+                    sessionStore.setArchivedCount(parsedArchivedCount);
+                    syncArchivedSessionStateFromStore();
                 }
-                const sessions = await response.json();
-                if (loadEpoch !== sessionListLoadEpoch) return;
-                allSessions = Array.isArray(sessions) ? sessions : [];
-                snapshot = { sessions: allSessions, archived_count: archivedSessionsCount };
             }
-            
-            // 更新缓存
-            sessionListCache.set(allSessions);
+            const sessions = await response.json();
+            if (loadEpoch !== sessionListLoadEpoch) return;
+            allSessions = Array.isArray(sessions) ? sessions : [];
+            snapshot = { sessions: allSessions, archived_count: archivedSessionsCount };
         }
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
@@ -783,9 +770,10 @@ async function createNewSessionInner() {
         setWelcome();
         replayingMessages = false;
         if (data && data.session) {
-            sessionListCache.set(sessionStore.list());
-            await loadSessions();
-            sessionListCache.invalidate();
+            syncArchivedSessionStateFromStore();
+            const nextStreamMap = renderSessionListFromStore();
+            applyServerStreamActiveMap(nextStreamMap);
+            renderSessionTitleFromStore();
             void loadSessions({ force: true });
         } else {
             sessionListCache.invalidate();

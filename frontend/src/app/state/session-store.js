@@ -160,9 +160,6 @@ function suppressSessionServerStreamActive(sessionId, ms) {
     if (!sid) return;
     sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
     sessionStore.setStreamActive(sid, false);
-    if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
-        serverStreamActiveBySession[sid] = false;
-    }
 }
 
 function setSessionServerStreamActive(sessionId, active) {
@@ -171,9 +168,6 @@ function setSessionServerStreamActive(sessionId, active) {
     if (!active) delete sessionStreamStopSuppressUntil[sid];
     if (active && isSessionStreamStopSuppressed(sid)) active = false;
     sessionStore.setStreamActive(sid, !!active);
-    if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
-        serverStreamActiveBySession[sid] = !!active;
-    }
 }
 
 function isServerStreamActive(sessionId) {
@@ -193,7 +187,4 @@ function applyServerStreamActiveMap(activeMap) {
         m[sid] = active;
     });
     sessionStore.applyStreamActiveMap(m);
-    if (typeof serverStreamActiveBySession !== 'undefined') {
-        serverStreamActiveBySession = m;
-    }
 }
