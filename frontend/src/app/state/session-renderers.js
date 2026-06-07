@@ -7,8 +7,8 @@ function renderSessionListFromStore() {
     sessionsList.innerHTML = '';
 
     function appendSection(sectionKey, title, list) {
-        if (!list.length && sectionKey !== 'archived') return;
         var displayCount = sectionKey === 'archived' ? selectArchivedDisplayCount() : list.length;
+        if (!displayCount) return;
         var expanded = sessionSectionExpanded(sectionKey);
         var sec = document.createElement('div');
         sec.className = 'session-section' + (expanded ? '' : ' is-collapsed');
@@ -59,13 +59,7 @@ function appendArchiveLoadButton(body) {
         loadBtn.disabled = true;
         loadBtn.textContent = '加载中...';
         try {
-            const response = await fetch('/sessions?include_archived=true');
-            const sessions = await response.json();
-            const all = Array.isArray(sessions) ? sessions : [];
-            sessionStore.setArchivedLoaded(all);
-            syncArchivedSessionStateFromStore();
-            sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
-            await loadSessions();
+            await loadArchivedSessions({ forceRender: true });
         } catch (err) {
             console.error('加载归档目录失败:', err);
             loadBtn.disabled = false;

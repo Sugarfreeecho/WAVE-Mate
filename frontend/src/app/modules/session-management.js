@@ -243,10 +243,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 const formData = new FormData();
                 formData.append('archived', sess.archived ? 'false' : 'true');
                 await fetch('/sessions/' + encodeURIComponent(sess.id) + '/archive', { method: 'PUT', body: formData });
+                const wasArchivedLoaded = sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions();
                 sessionListCache.invalidate();
-                sessionStore.clearArchivedLoaded();
-                syncArchivedSessionStateFromStore();
-                await loadSessions();
+                await loadSessions({ skipArchivedRefresh: true });
+                if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
             } catch (err) { console.error('归档失败', err); }
         });
     }
@@ -264,6 +264,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 cancelText: '取消',
             });
             if (!okDel) return;
+            const wasArchivedLoaded = sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions();
             await requestInterrupt(sess.id);
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
@@ -275,6 +276,13 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             }
             await fetch('/sessions/' + sess.id, { method: 'DELETE' });
             sessionStore.remove(sess.id);
+            if (wasArchivedLoaded) {
+                sessionStore.setArchivedLoaded((sessionStore.archivedSessions || []).filter(function (s) {
+                    return s && s.id !== sess.id;
+                }));
+                persistArchivedSessionsLoaded(true);
+                syncArchivedSessionStateFromStore();
+            }
             sessionListCache.invalidate();
             if (div && div.parentNode) div.remove();
             sessionUnreadComplete.delete(sess.id);
@@ -287,6 +295,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 if (remaining.length > 0) await switchSession(remaining[0].id);
                 else await createNewSession();
             } else if (div && div.parentNode) div.remove();
+            if (wasArchivedLoaded) {
+                renderSessionListIfChanged(true);
+                void loadArchivedSessions({ background: true });
+            }
         });
     }
     const nameSpan = div.querySelector('.session-name');
@@ -410,11 +422,28 @@ let createNewSessionQueue = Promise.resolve();
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
+let archivedSessionsLoadEpoch = 0;
+const LS_ARCHIVED_SESSIONS_LOADED = 'myagent-archived-sessions-loaded';
 
 function syncArchivedSessionStateFromStore() {
     archivedSessionsLoaded = !!sessionStore.archivedLoaded;
     archivedSessionsCache = sessionStore.archivedSessions;
     archivedSessionsCount = sessionStore.archivedCount;
+}
+
+function persistArchivedSessionsLoaded(loaded) {
+    try {
+        if (loaded) localStorage.setItem(LS_ARCHIVED_SESSIONS_LOADED, '1');
+        else localStorage.removeItem(LS_ARCHIVED_SESSIONS_LOADED);
+    } catch (e) { /* ignore */ }
+}
+
+function shouldAutoLoadArchivedSessions() {
+    try {
+        return localStorage.getItem(LS_ARCHIVED_SESSIONS_LOADED) === '1';
+    } catch (e) {
+        return false;
+    }
 }
 
 function computeSessionListRenderKey() {
@@ -504,6 +533,24 @@ async function fetchSessionsStateSnapshot(opts) {
     return snapshot;
 }
 
+async function loadArchivedSessions(opts) {
+    opts = opts || {};
+    const loadEpoch = ++archivedSessionsLoadEpoch;
+    try {
+        const response = await fetch('/sessions?include_archived=true');
+        const sessions = await response.json();
+        if (loadEpoch !== archivedSessionsLoadEpoch) return;
+        const all = Array.isArray(sessions) ? sessions : [];
+        sessionStore.setArchivedLoaded(all);
+        persistArchivedSessionsLoaded(true);
+        syncArchivedSessionStateFromStore();
+        renderSessionListIfChanged(!!opts.forceRender);
+    } catch (err) {
+        console.error('加载归档目录失败:', err);
+        if (!opts.background) throw err;
+    }
+}
+
 async function loadSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
@@ -513,12 +560,12 @@ async function loadSessions(opts) {
         let snapshot = null;
         
         try {
-            snapshot = await fetchSessionsStateSnapshot({ includeArchived: sessionStore.archivedLoaded });
+            snapshot = await fetchSessionsStateSnapshot();
             if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
             console.error('加载会话状态快照失败，回退旧接口:', stateErr);
-            const response = await fetch('/sessions' + (sessionStore.archivedLoaded ? '?include_archived=true' : ''));
+            const response = await fetch('/sessions');
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
@@ -530,14 +577,9 @@ async function loadSessions(opts) {
             const sessions = await response.json();
             if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(sessions) ? sessions : [];
-            if (sessionStore.archivedLoaded) {
-                sessionStore.setArchivedLoaded(allSessions);
-                syncArchivedSessionStateFromStore();
-            }
             snapshot = {
                 sessions: allSessions,
                 archived_count: archivedSessionsCount,
-                include_archived: sessionStore.archivedLoaded,
             };
         }
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
@@ -555,6 +597,9 @@ async function loadSessions(opts) {
 
         renderSessionListIfChanged(!!opts.forceRender);
         sessionStore.ui.loadingSessions = false;
+        if (!opts.skipArchivedRefresh && (sessionStore.archivedLoaded || shouldAutoLoadArchivedSessions())) {
+            void loadArchivedSessions({ background: true });
+        }
         return;
 
         const pinnedList = [];
