@@ -822,7 +822,7 @@ function appendKeyContextStreamDelta(ctx, delta, runSessionId) {
 }
 
 function isSessionRunning(sessionId) {
-    return !!(sessionId && (runningBySession[sessionId] || serverStreamActiveBySession[sessionId]));
+    return !!(sessionId && (runningBySession[sessionId] || isServerStreamActive(sessionId)));
 }
 
 function syncDisconnectedProcessGroups() {
@@ -1080,7 +1080,7 @@ async function fetchSessionStreamActiveMap() {
 function maybeStartStreamPollForSession(sid) {
     clearStreamPoll();
     if (!sid) return;
-    if (!serverStreamActiveBySession[sid]) return;
+    if (!isServerStreamActive(sid)) return;
     if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid);
     }
@@ -1094,7 +1094,7 @@ function maybeStartStreamPollForSession(sid) {
             }
             pollCount += 1;
             const m = await fetchSessionStreamActiveMap();
-            serverStreamActiveBySession = m;
+            applyServerStreamActiveMap(m);
             const still = !!m[sid];
             if (!still || pollCount >= MAX_POLL_COUNT) {
                 clearStreamPoll();

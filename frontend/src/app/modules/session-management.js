@@ -19,7 +19,7 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = runningBySession[currentSessionId];
     const sid = currentSessionId;
-    serverStreamActiveBySession[sid] = false;
+    setSessionServerStreamActive(sid, false);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -86,7 +86,7 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 /** 根据 runningBySession / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
-    const serverStreamActive = opts.serverStreamActive === true;
+    const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
     if (!itemDiv || !sessionId) return;
     itemDiv.classList.remove('is-generating', 'is-unread-result');
     var nameEl = itemDiv.querySelector('.session-name');
@@ -109,7 +109,7 @@ function syncSessionListIndicatorClasses() {
         if (!el) return;
         var sid = el.getAttribute('data-id');
         div.classList.toggle('active', !!sid && sid === currentSessionId);
-        applySessionItemIndicators(div, sid, { serverStreamActive: !!serverStreamActiveBySession[sid] });
+        applySessionItemIndicators(div, sid);
     });
 }
 
@@ -346,7 +346,7 @@ async function refreshSingleSessionRow(sessionId) {
         }
         sessionStore.upsert(sess);
         sessionListCache.invalidate();
-        serverStreamActiveBySession[sess.id] = !!sess.stream_active;
+        setSessionServerStreamActive(sess.id, !!sess.stream_active);
         const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
         const div = item && item.closest('.session-item');
         if (!div) {
@@ -558,7 +558,7 @@ async function loadSessions(opts) {
         appendSection('normal', '会话目录', normalList);
         appendSection('archived', '归档目录', archivedList);
 
-        serverStreamActiveBySession = nextStreamMap;
+        applyServerStreamActiveMap(nextStreamMap);
         updateSessionTitle();
     } catch (error) {
         console.error('加载会话列表失败:', error);

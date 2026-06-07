@@ -190,7 +190,7 @@ async function startContinueAfterSubagents(sessionId) {
 
 async function attachSessionEventStream(sessionId) {
     if (!sessionId || runningBySession[sessionId]) return;
-    if (!serverStreamActiveBySession[sessionId]) return;
+    if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
     try {

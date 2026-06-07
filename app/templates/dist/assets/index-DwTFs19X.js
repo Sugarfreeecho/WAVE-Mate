@@ -324,19 +324,24 @@ function showUiAlert(opts) {
     sessionsById: new Map(),
     order: [],
     archivedCount: 0,
+    streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
         const nextById = new Map();
         const nextOrder = [];
+        const nextStreamActive = Object.create(null);
         const list = Array.isArray(sessions) ? sessions : [];
         for (let i = 0; i < list.length; i += 1) {
             const s = list[i];
             if (!s || !s.id) continue;
-            nextById.set(String(s.id), s);
-            nextOrder.push(String(s.id));
+            const sid = String(s.id);
+            nextById.set(sid, s);
+            nextOrder.push(sid);
+            nextStreamActive[sid] = !!s.stream_active;
         }
         this.sessionsById = nextById;
         this.order = nextOrder;
+        this.streamActiveById = nextStreamActive;
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
         }
@@ -347,12 +352,16 @@ function showUiAlert(opts) {
         const sid = String(session.id);
         this.sessionsById.set(sid, session);
         if (this.order.indexOf(sid) < 0) this.order.unshift(sid);
+        if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
+            this.streamActiveById[sid] = !!session.stream_active;
+        }
     },
 
     remove(sessionId) {
         const sid = String(sessionId || '');
         if (!sid) return;
         this.sessionsById.delete(sid);
+        delete this.streamActiveById[sid];
         this.order = this.order.filter(function (id) { return id !== sid; });
     },
 
@@ -374,7 +383,60 @@ function showUiAlert(opts) {
             this.archivedCount = Number(count);
         }
     },
+
+    isStreamActive(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return false;
+        if (Object.prototype.hasOwnProperty.call(this.streamActiveById, sid)) {
+            return !!this.streamActiveById[sid];
+        }
+        const sess = this.get(sid);
+        return !!(sess && sess.stream_active);
+    },
+
+    setStreamActive(sessionId, active) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.streamActiveById[sid] = !!active;
+        const sess = this.sessionsById.get(sid);
+        if (sess) sess.stream_active = !!active;
+    },
+
+    applyStreamActiveMap(activeMap) {
+        const next = Object.create(null);
+        const src = activeMap || {};
+        Object.keys(src).forEach(function (sid) {
+            next[String(sid)] = !!src[sid];
+        });
+        this.streamActiveById = next;
+        this.sessionsById.forEach(function (sess, sid) {
+            sess.stream_active = !!next[sid];
+        });
+    },
 };
+
+function setSessionServerStreamActive(sessionId, active) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    sessionStore.setStreamActive(sid, !!active);
+    if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
+        serverStreamActiveBySession[sid] = !!active;
+    }
+}
+
+function isServerStreamActive(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    return sessionStore.isStreamActive(sid);
+}
+
+function applyServerStreamActiveMap(activeMap) {
+    const m = activeMap || Object.create(null);
+    sessionStore.applyStreamActiveMap(m);
+    if (typeof serverStreamActiveBySession !== 'undefined') {
+        serverStreamActiveBySession = m;
+    }
+}
 `,w=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
@@ -1199,7 +1261,7 @@ function appendKeyContextStreamDelta(ctx, delta, runSessionId) {
 }
 
 function isSessionRunning(sessionId) {
-    return !!(sessionId && (runningBySession[sessionId] || serverStreamActiveBySession[sessionId]));
+    return !!(sessionId && (runningBySession[sessionId] || isServerStreamActive(sessionId)));
 }
 
 function syncDisconnectedProcessGroups() {
@@ -1457,7 +1519,7 @@ async function fetchSessionStreamActiveMap() {
 function maybeStartStreamPollForSession(sid) {
     clearStreamPoll();
     if (!sid) return;
-    if (!serverStreamActiveBySession[sid]) return;
+    if (!isServerStreamActive(sid)) return;
     if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid);
     }
@@ -1471,7 +1533,7 @@ function maybeStartStreamPollForSession(sid) {
             }
             pollCount += 1;
             const m = await fetchSessionStreamActiveMap();
-            serverStreamActiveBySession = m;
+            applyServerStreamActiveMap(m);
             const still = !!m[sid];
             if (!still || pollCount >= MAX_POLL_COUNT) {
                 clearStreamPoll();
@@ -6749,7 +6811,7 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = runningBySession[currentSessionId];
     const sid = currentSessionId;
-    serverStreamActiveBySession[sid] = false;
+    setSessionServerStreamActive(sid, false);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -6816,7 +6878,7 @@ function hideLoading() { const loader = document.getElementById('chat-loading');
 /** 根据 runningBySession / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
-    const serverStreamActive = opts.serverStreamActive === true;
+    const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
     if (!itemDiv || !sessionId) return;
     itemDiv.classList.remove('is-generating', 'is-unread-result');
     var nameEl = itemDiv.querySelector('.session-name');
@@ -6839,7 +6901,7 @@ function syncSessionListIndicatorClasses() {
         if (!el) return;
         var sid = el.getAttribute('data-id');
         div.classList.toggle('active', !!sid && sid === currentSessionId);
-        applySessionItemIndicators(div, sid, { serverStreamActive: !!serverStreamActiveBySession[sid] });
+        applySessionItemIndicators(div, sid);
     });
 }
 
@@ -7076,7 +7138,7 @@ async function refreshSingleSessionRow(sessionId) {
         }
         sessionStore.upsert(sess);
         sessionListCache.invalidate();
-        serverStreamActiveBySession[sess.id] = !!sess.stream_active;
+        setSessionServerStreamActive(sess.id, !!sess.stream_active);
         const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
         const div = item && item.closest('.session-item');
         if (!div) {
@@ -7288,7 +7350,7 @@ async function loadSessions(opts) {
         appendSection('normal', '会话目录', normalList);
         appendSection('archived', '归档目录', archivedList);
 
-        serverStreamActiveBySession = nextStreamMap;
+        applyServerStreamActiveMap(nextStreamMap);
         updateSessionTitle();
     } catch (error) {
         console.error('加载会话列表失败:', error);
@@ -7681,7 +7743,7 @@ async function startContinueAfterSubagents(sessionId) {
 
 async function attachSessionEventStream(sessionId) {
     if (!sessionId || runningBySession[sessionId]) return;
-    if (!serverStreamActiveBySession[sessionId]) return;
+    if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
     try {
