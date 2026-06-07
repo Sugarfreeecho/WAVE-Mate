@@ -7107,11 +7107,12 @@ const uiEventCountCache = {
     }
 };
 
-async function loadSessions() {
+async function loadSessions(opts) {
+    opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
     try {
         // 检查缓存
-        const cachedData = sessionListCache.get();
+        const cachedData = opts.force ? null : sessionListCache.get();
         let allSessions;
         
         if (cachedData) {
@@ -7413,8 +7414,15 @@ async function createNewSessionInner() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;
-        sessionListCache.invalidate();
-        await loadSessions();
+        if (data && data.session) {
+            sessionListCache.set(sessionStore.list());
+            await loadSessions();
+            sessionListCache.invalidate();
+            void loadSessions({ force: true });
+        } else {
+            sessionListCache.invalidate();
+            await loadSessions({ force: true });
+        }
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
         scheduleContextTokensAfterPaint(currentSessionId);
