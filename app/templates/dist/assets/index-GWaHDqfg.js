@@ -321,11 +321,19 @@ function showUiAlert(opts) {
     return p;
 }
 `,C=`const sessionStore = {
+    seq: 0,
     sessionsById: new Map(),
-    order: [],
+    sessionOrder: [],
+    currentSessionId: null,
+    runsBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
+    unreadComplete: new Set(),
+    ui: {
+        loadingSessions: false,
+        loadingMessages: false,
+    },
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
@@ -342,7 +350,7 @@ function showUiAlert(opts) {
             nextStreamActive[sid] = !!s.stream_active;
         }
         this.sessionsById = nextById;
-        this.order = nextOrder;
+        this.sessionOrder = nextOrder;
         this.streamActiveById = nextStreamActive;
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
@@ -353,7 +361,7 @@ function showUiAlert(opts) {
         if (!session || !session.id) return;
         const sid = String(session.id);
         this.sessionsById.set(sid, session);
-        if (this.order.indexOf(sid) < 0) this.order.unshift(sid);
+        if (this.sessionOrder.indexOf(sid) < 0) this.sessionOrder.unshift(sid);
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
             this.streamActiveById[sid] = !!session.stream_active;
         }
@@ -364,13 +372,15 @@ function showUiAlert(opts) {
         if (!sid) return;
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
-        this.order = this.order.filter(function (id) { return id !== sid; });
+        this.runsBySession.delete(sid);
+        this.unreadComplete.delete(sid);
+        this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
     },
 
     list() {
         const out = [];
-        for (let i = 0; i < this.order.length; i += 1) {
-            const s = this.sessionsById.get(this.order[i]);
+        for (let i = 0; i < this.sessionOrder.length; i += 1) {
+            const s = this.sessionsById.get(this.sessionOrder[i]);
             if (s) out.push(s);
         }
         return out;
@@ -378,6 +388,10 @@ function showUiAlert(opts) {
 
     get(sessionId) {
         return this.sessionsById.get(String(sessionId || '')) || null;
+    },
+
+    setCurrentSession(sessionId) {
+        this.currentSessionId = sessionId ? String(sessionId) : null;
     },
 
     setArchivedCount(count) {
@@ -432,6 +446,21 @@ function showUiAlert(opts) {
         this.sessionsById.forEach(function (sess, sid) {
             sess.stream_active = !!next[sid];
         });
+    },
+
+    setRun(sessionId, run) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        if (run) this.runsBySession.set(sid, run);
+        else this.runsBySession.delete(sid);
+    },
+
+    getRun(sessionId) {
+        return this.runsBySession.get(String(sessionId || '')) || null;
+    },
+
+    hasRun(sessionId) {
+        return this.runsBySession.has(String(sessionId || ''));
     },
 };
 
@@ -490,7 +519,189 @@ function applyServerStreamActiveMap(activeMap) {
         serverStreamActiveBySession = m;
     }
 }
-`,w=`function formatTokenCompact(n) {
+`,w=`function selectCurrentSession() {
+    return sessionStore.get(sessionStore.currentSessionId);
+}
+
+function selectAllSessions() {
+    return sessionStore.list();
+}
+
+function selectArchivedSessions() {
+    return sessionStore.archivedList();
+}
+
+function selectSessionSections() {
+    const pinnedList = [];
+    const normalList = [];
+    const allSessions = selectAllSessions();
+    for (let i = 0; i < allSessions.length; i += 1) {
+        const s = allSessions[i];
+        if (!s || !s.id || !!s.archived) continue;
+        if (s.pinned) pinnedList.push(s);
+        else normalList.push(s);
+    }
+    return {
+        pinned: pinnedList,
+        normal: normalList,
+        archived: selectArchivedSessions(),
+    };
+}
+
+function selectArchivedDisplayCount() {
+    return sessionStore.archivedLoaded ? selectArchivedSessions().length : sessionStore.archivedCount;
+}
+
+function selectIsSessionRunning(sessionId) {
+    return !!(sessionId && (sessionStore.hasRun(sessionId) || isServerStreamActive(sessionId)));
+}
+
+function selectRunForSession(sessionId) {
+    return sessionStore.getRun(sessionId);
+}
+`,T=`function applySessionSnapshot(snapshot) {
+    snapshot = snapshot || {};
+    const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
+    const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;
+    if (Number.isFinite(Number(snapshot.seq)) && Number(snapshot.seq) > sessionStore.seq) {
+        sessionStore.seq = Number(snapshot.seq);
+    }
+    sessionStore.applySnapshot(sessions, archivedCount);
+    if (snapshot.current_session_id || snapshot.currentSessionId) {
+        sessionStore.setCurrentSession(snapshot.current_session_id || snapshot.currentSessionId);
+    }
+    if (Array.isArray(snapshot.active_runs)) {
+        const active = Object.create(null);
+        snapshot.active_runs.forEach(function (run) {
+            const sid = typeof run === 'string' ? run : (run && run.session_id);
+            if (sid) active[String(sid)] = true;
+        });
+        applyServerStreamActiveMap(active);
+    }
+}
+
+function applySessionPatch(patch) {
+    patch = patch || {};
+    if (Number.isFinite(Number(patch.seq)) && Number(patch.seq) <= sessionStore.seq) return;
+    if (Number.isFinite(Number(patch.seq))) sessionStore.seq = Number(patch.seq);
+    if (patch.session) sessionStore.upsert(patch.session);
+    if (patch.remove_session_id || patch.removedSessionId) {
+        sessionStore.remove(patch.remove_session_id || patch.removedSessionId);
+    }
+    if (patch.current_session_id || patch.currentSessionId) {
+        sessionStore.setCurrentSession(patch.current_session_id || patch.currentSessionId);
+    }
+    if (patch.archived_count != null || patch.archivedCount != null) {
+        sessionStore.setArchivedCount(patch.archived_count != null ? patch.archived_count : patch.archivedCount);
+    }
+    if (patch.stream_active != null && (patch.session_id || patch.sessionId)) {
+        setSessionServerStreamActive(patch.session_id || patch.sessionId, !!patch.stream_active);
+    }
+}
+
+function setCurrentSessionState(sessionId) {
+    currentSessionId = sessionId || null;
+    sessionStore.setCurrentSession(currentSessionId);
+}
+
+function setSessionRunState(sessionId, run) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    sessionStore.setRun(sid, run || null);
+    if (run) runningBySession[sid] = run;
+    else delete runningBySession[sid];
+}
+
+function getSessionRunState(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return null;
+    return sessionStore.getRun(sid) || runningBySession[sid] || null;
+}
+
+function clearSessionRunState(sessionId) {
+    setSessionRunState(sessionId, null);
+}
+`,E=`function renderSessionListFromStore() {
+    if (!sessionsList) return Object.create(null);
+    const nextStreamMap = Object.create(null);
+    const sections = selectSessionSections();
+    const allSessions = selectAllSessions();
+
+    sessionsList.innerHTML = '';
+
+    function appendSection(sectionKey, title, list) {
+        if (!list.length && sectionKey !== 'archived') return;
+        var displayCount = sectionKey === 'archived' ? selectArchivedDisplayCount() : list.length;
+        var expanded = sessionSectionExpanded(sectionKey);
+        var sec = document.createElement('div');
+        sec.className = 'session-section' + (expanded ? '' : ' is-collapsed');
+        sec.dataset.section = sectionKey;
+
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'session-section-toggle';
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        toggle.innerHTML = '<span class="session-section-toggle-label">' + escapeHtml(title) + '</span>'
+            + '<span class="session-section-meta">'
+            + '<span class="session-section-count">' + String(displayCount) + '</span>'
+            + '<span class="session-section-chev" aria-hidden="true">▾</span>'
+            + '</span>';
+        toggle.addEventListener('click', function (e) {
+            e.preventDefault();
+            sec.classList.toggle('is-collapsed');
+            var isExpanded = !sec.classList.contains('is-collapsed');
+            persistSessionSectionExpanded(sectionKey, isExpanded);
+            toggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+        });
+
+        var body = document.createElement('div');
+        body.className = 'session-section-body';
+        if (sectionKey === 'archived') appendArchiveLoadButton(body);
+        for (let j = 0; j < list.length; j += 1) {
+            body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
+        }
+        sec.appendChild(toggle);
+        sec.appendChild(body);
+        sessionsList.appendChild(sec);
+    }
+
+    appendSection('pinned', '置顶目录', sections.pinned);
+    appendSection('normal', '会话目录', sections.normal);
+    appendSection('archived', '归档目录', sections.archived);
+    return nextStreamMap;
+}
+
+function appendArchiveLoadButton(body) {
+    var loadBtn = document.createElement('button');
+    loadBtn.type = 'button';
+    loadBtn.className = 'session-archive-load-btn';
+    loadBtn.textContent = sessionStore.archivedLoaded ? '刷新归档目录' : '加载归档目录';
+    loadBtn.addEventListener('click', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        loadBtn.disabled = true;
+        loadBtn.textContent = '加载中...';
+        try {
+            const response = await fetch('/sessions?include_archived=true');
+            const sessions = await response.json();
+            const all = Array.isArray(sessions) ? sessions : [];
+            sessionStore.setArchivedLoaded(all);
+            syncArchivedSessionStateFromStore();
+            sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
+            await loadSessions();
+        } catch (err) {
+            console.error('加载归档目录失败:', err);
+            loadBtn.disabled = false;
+            loadBtn.textContent = sessionStore.archivedLoaded ? '刷新归档目录' : '加载归档目录';
+        }
+    });
+    body.appendChild(loadBtn);
+}
+
+function renderSessionTitleFromStore() {
+    updateSessionTitle();
+}
+`,L=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -596,7 +807,7 @@ function setScrollTopImmediate(el, y) {
 /** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
 function getProcessBodyElForCurrentRun() {
     var sid = currentSessionId;
-    var run = sid && runningBySession[sid];
+    var run = sid && getSessionRunState(sid);
     if (!run || !run.ctx) return null;
     var c = run.ctx;
     if (c.currentProcessGroup && c.currentProcessGroup.isConnected) {
@@ -1190,7 +1401,7 @@ function prepareStashLeaving(leavingId) {
 }
 
 function restoreStreamForRunningSession(enteringId) {
-    const run = runningBySession[enteringId];
+    const run = getSessionRunState(enteringId);
     if (!run || !run.ctx || !run.ctx.stream) return false;
     const st = run.ctx.stream;
     if (!st.parentNode) return false;
@@ -1314,12 +1525,12 @@ function appendKeyContextStreamDelta(ctx, delta, runSessionId) {
 }
 
 function isSessionRunning(sessionId) {
-    return !!(sessionId && (runningBySession[sessionId] || isServerStreamActive(sessionId)));
+    return selectIsSessionRunning(sessionId);
 }
 
 function syncDisconnectedProcessGroups() {
-    Object.keys(runningBySession).forEach(function (sid) {
-        const c = runningBySession[sid].ctx;
+    sessionStore.runsBySession.forEach(function (run, sid) {
+        const c = run && run.ctx;
         if (c && c.currentProcessGroup && !c.currentProcessGroup.isConnected) c.currentProcessGroup = null;
     });
 }
@@ -1574,7 +1785,7 @@ function maybeStartStreamPollForSession(sid, opts) {
     clearStreamPoll();
     if (!sid) return;
     if (!isServerStreamActive(sid)) return;
-    if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
+    if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
     let pollCount = 0;
@@ -1667,7 +1878,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,T=`function ensureUiHoverTooltipEl() {
+`,k=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2053,7 +2264,7 @@ async function refreshTodoPlanPanel() {
     }
 }
 
-`,E=`function removeMessagesFromNode(startWrap) {
+`,_=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -2982,7 +3193,7 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     
     // 如果会话正在运行，执行过程块默认置底
     if (isSessionRunning(sessionId)) {
-        var run = runningBySession[sessionId];
+        var run = getSessionRunState(sessionId);
         if (run && run.ctx && run.ctx.stream) {
             var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');
             if (agg) {
@@ -3301,8 +3512,9 @@ function updateSessionTitle() {
         setContextTokenLabel(null, null);
         return;
     }
+    const sess = selectCurrentSession();
     const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');
-    const raw = el ? (el.getAttribute('data-original') || el.textContent || '') : '';
+    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');
     const name = (raw && raw.trim()) ? raw.trim() : 'Session';
     br.textContent = name;
     sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);
@@ -4488,7 +4700,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,L=`var subagentCardSyncTimer = null;
+`,P=`var subagentCardSyncTimer = null;
 var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
@@ -6762,7 +6974,7 @@ function updateSubagentBlockFinish(ctx, event) {
     handleSubagentLifecycleEvent(event);
 }
 
-`,k=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,A=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
@@ -6844,7 +7056,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,_=`function setSendButtonState() {
+`,B=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -6863,7 +7075,7 @@ async function requestInterrupt(sessionId) {
 
 function pauseCurrentRun() {
     if (!currentSessionId) return;
-    const run = runningBySession[currentSessionId];
+    const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
     suppressSessionServerStreamActive(sid);
     if (!run) {
@@ -6876,7 +7088,7 @@ function pauseCurrentRun() {
     /* 先同步 abort 本地 fetch 与从 runningBySession 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
     try { run.controller.abort(); } catch (e) { /* ignore */ }
-    delete runningBySession[sid];
+    clearSessionRunState(sid);
     setSendButtonState();
     syncSessionListIndicatorClasses();
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
@@ -7112,10 +7324,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             if (!okDel) return;
             await requestInterrupt(sess.id);
             if (isSessionRunning(sess.id)) {
-                try { runningBySession[sess.id].controller.abort(); } catch (err) { /* ignore */ }
-                const r = runningBySession[sess.id];
+                const r = getSessionRunState(sess.id);
+                try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
                 if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-                delete runningBySession[sess.id];
+                clearSessionRunState(sess.id);
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
@@ -7290,6 +7502,7 @@ const uiEventCountCache = {
 async function loadSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
+    sessionStore.ui.loadingSessions = true;
     try {
         // 检查缓存
         const cachedData = opts.force ? null : sessionListCache.get();
@@ -7316,11 +7529,11 @@ async function loadSessions(opts) {
             // 更新缓存
             sessionListCache.set(allSessions);
         }
-        sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        applySessionSnapshot({ sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
-        const nextStreamMap = Object.create(null);
+        let nextStreamMap = Object.create(null);
         const idSet = new Set();
         for (let si = 0; si < allSessions.length; si += 1) {
             if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
@@ -7329,6 +7542,12 @@ async function loadSessions(opts) {
             if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
         });
         persistSessionUnread();
+
+        nextStreamMap = renderSessionListFromStore();
+        applyServerStreamActiveMap(nextStreamMap);
+        renderSessionTitleFromStore();
+        sessionStore.ui.loadingSessions = false;
+        return;
 
         const pinnedList = [];
         const normalList = [];
@@ -7342,8 +7561,6 @@ async function loadSessions(opts) {
             else if (pin) pinnedList.push(s);
             else normalList.push(s);
         }
-
-        sessionsList.innerHTML = '';
 
         function appendSection(sectionKey, title, list) {
             if (!list.length && sectionKey !== 'archived') return;
@@ -7413,6 +7630,7 @@ async function loadSessions(opts) {
         applyServerStreamActiveMap(nextStreamMap);
         updateSessionTitle();
     } catch (error) {
+        sessionStore.ui.loadingSessions = false;
         console.error('加载会话列表失败:', error);
         appendLogVisible('加载会话列表失败', 'error-log');
     }
@@ -7422,6 +7640,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
     const loadToken = ++messageLoadEpoch;
+    sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
     replayingMessages = true;
     resetSessionHistoryPaging();
@@ -7508,6 +7727,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
     } finally {
+        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
     }
@@ -7529,7 +7749,7 @@ async function switchSession(sessionId) {
     prepareStashLeaving(leaving);
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
-    currentSessionId = sessionId;
+    setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
     syncSessionListIndicatorClasses();
@@ -7592,7 +7812,7 @@ async function createNewSessionInner() {
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
-        currentSessionId = data.session_id;
+        setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
@@ -7615,7 +7835,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,P=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,R=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -7760,15 +7980,15 @@ async function startContinueAfterSubagents(sessionId) {
         const preCount = await getUiEventCount();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
-        if (runningBySession[runSessionId] && runningBySession[runSessionId].ctx) {
-            runCtx = runningBySession[runSessionId].ctx;
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
+            runCtx = getSessionRunState(runSessionId).ctx;
         } else {
             runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
             resetLlmState(runCtx);
             finalizeLlmStreamChunks(runCtx);
         }
         const ac = new AbortController();
-        runningBySession[runSessionId] = { controller: ac, ctx: runCtx };
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -7792,7 +8012,7 @@ async function startContinueAfterSubagents(sessionId) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
             }
-            if (runningBySession[runSessionId]) delete runningBySession[runSessionId];
+            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
             setSendButtonState();
             syncSessionListIndicatorClasses();
             await refreshSingleSessionRow(runSessionId);
@@ -7807,7 +8027,7 @@ async function startContinueAfterSubagents(sessionId) {
 
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
-    if (!sessionId || runningBySession[sessionId]) return;
+    if (!sessionId || getSessionRunState(sessionId)) return;
     if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
@@ -7834,7 +8054,7 @@ async function attachSessionEventStream(sessionId, opts) {
         resetLlmState(runCtx);
         finalizeLlmStreamChunks(runCtx);
         const ac = new AbortController();
-        runningBySession[runSessionId] = { controller: ac, ctx: runCtx, reattached: true };
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -7852,8 +8072,8 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
         }
-        if (runningBySession[runSessionId] && runningBySession[runSessionId].reattached) {
-            delete runningBySession[runSessionId];
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
+            clearSessionRunState(runSessionId);
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -7950,7 +8170,7 @@ async function sendMessage() {
     finalizeLlmStreamChunks(runCtx);
     sealProcessGroup(runCtx);
     const ac = new AbortController();
-    runningBySession[runSessionId] = { controller: ac, ctx: runCtx };
+    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
     setSendButtonState();
     syncSessionListIndicatorClasses();
     if (!switchedAway) {
@@ -8000,8 +8220,8 @@ async function sendMessage() {
         } else {
             updateSubagentContinueBanner(runSessionId);
         }
-        if (runningBySession[runSessionId]) {
-            delete runningBySession[runSessionId];
+        if (getSessionRunState(runSessionId)) {
+            clearSessionRunState(runSessionId);
             if (runSessionId !== currentSessionId) {
                 const el = runCtx.stream;
                 if (el && el.parentNode) el.remove();
@@ -8106,7 +8326,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,A=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,F=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -8345,8 +8565,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,B=[x,I,C,w,T,E,L,k,_,P,A];Function(`"use strict";
-`+B.join(`
+`,M=[x,I,C,w,T,E,L,k,_,P,A,B,R,F];Function(`"use strict";
+`+M.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();

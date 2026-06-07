@@ -104,7 +104,7 @@ function setScrollTopImmediate(el, y) {
 /** 当前运行会话对应的执行过程框滚动容器（.process-aggregate-body） */
 function getProcessBodyElForCurrentRun() {
     var sid = currentSessionId;
-    var run = sid && runningBySession[sid];
+    var run = sid && getSessionRunState(sid);
     if (!run || !run.ctx) return null;
     var c = run.ctx;
     if (c.currentProcessGroup && c.currentProcessGroup.isConnected) {
@@ -698,7 +698,7 @@ function prepareStashLeaving(leavingId) {
 }
 
 function restoreStreamForRunningSession(enteringId) {
-    const run = runningBySession[enteringId];
+    const run = getSessionRunState(enteringId);
     if (!run || !run.ctx || !run.ctx.stream) return false;
     const st = run.ctx.stream;
     if (!st.parentNode) return false;
@@ -822,12 +822,12 @@ function appendKeyContextStreamDelta(ctx, delta, runSessionId) {
 }
 
 function isSessionRunning(sessionId) {
-    return !!(sessionId && (runningBySession[sessionId] || isServerStreamActive(sessionId)));
+    return selectIsSessionRunning(sessionId);
 }
 
 function syncDisconnectedProcessGroups() {
-    Object.keys(runningBySession).forEach(function (sid) {
-        const c = runningBySession[sid].ctx;
+    sessionStore.runsBySession.forEach(function (run, sid) {
+        const c = run && run.ctx;
         if (c && c.currentProcessGroup && !c.currentProcessGroup.isConnected) c.currentProcessGroup = null;
     });
 }
@@ -1082,7 +1082,7 @@ function maybeStartStreamPollForSession(sid, opts) {
     clearStreamPoll();
     if (!sid) return;
     if (!isServerStreamActive(sid)) return;
-    if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
+    if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
     let pollCount = 0;

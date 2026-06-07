@@ -927,7 +927,7 @@ function applyChatScrollAfterHistoryLoad(sessionId, mode) {
     
     // 如果会话正在运行，执行过程块默认置底
     if (isSessionRunning(sessionId)) {
-        var run = runningBySession[sessionId];
+        var run = getSessionRunState(sessionId);
         if (run && run.ctx && run.ctx.stream) {
             var agg = run.ctx.stream.querySelector('.process-aggregate:last-of-type');
             if (agg) {
@@ -1246,8 +1246,9 @@ function updateSessionTitle() {
         setContextTokenLabel(null, null);
         return;
     }
+    const sess = selectCurrentSession();
     const el = document.querySelector('.session-name[data-id="' + currentSessionId + '"]');
-    const raw = el ? (el.getAttribute('data-original') || el.textContent || '') : '';
+    const raw = sess && sess.name != null ? String(sess.name) : (el ? (el.getAttribute('data-original') || el.textContent || '') : '');
     const name = (raw && raw.trim()) ? raw.trim() : 'Session';
     br.textContent = name;
     sub.innerHTML = buildSessionWorkspaceSubtitle(currentSessionId);

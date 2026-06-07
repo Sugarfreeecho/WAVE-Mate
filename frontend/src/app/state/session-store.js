@@ -1,9 +1,17 @@
 const sessionStore = {
+    seq: 0,
     sessionsById: new Map(),
-    order: [],
+    sessionOrder: [],
+    currentSessionId: null,
+    runsBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
+    unreadComplete: new Set(),
+    ui: {
+        loadingSessions: false,
+        loadingMessages: false,
+    },
     streamActiveById: Object.create(null),
 
     applySnapshot(sessions, archivedCount) {
@@ -20,7 +28,7 @@ const sessionStore = {
             nextStreamActive[sid] = !!s.stream_active;
         }
         this.sessionsById = nextById;
-        this.order = nextOrder;
+        this.sessionOrder = nextOrder;
         this.streamActiveById = nextStreamActive;
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
@@ -31,7 +39,7 @@ const sessionStore = {
         if (!session || !session.id) return;
         const sid = String(session.id);
         this.sessionsById.set(sid, session);
-        if (this.order.indexOf(sid) < 0) this.order.unshift(sid);
+        if (this.sessionOrder.indexOf(sid) < 0) this.sessionOrder.unshift(sid);
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
             this.streamActiveById[sid] = !!session.stream_active;
         }
@@ -42,13 +50,15 @@ const sessionStore = {
         if (!sid) return;
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
-        this.order = this.order.filter(function (id) { return id !== sid; });
+        this.runsBySession.delete(sid);
+        this.unreadComplete.delete(sid);
+        this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
     },
 
     list() {
         const out = [];
-        for (let i = 0; i < this.order.length; i += 1) {
-            const s = this.sessionsById.get(this.order[i]);
+        for (let i = 0; i < this.sessionOrder.length; i += 1) {
+            const s = this.sessionsById.get(this.sessionOrder[i]);
             if (s) out.push(s);
         }
         return out;
@@ -56,6 +66,10 @@ const sessionStore = {
 
     get(sessionId) {
         return this.sessionsById.get(String(sessionId || '')) || null;
+    },
+
+    setCurrentSession(sessionId) {
+        this.currentSessionId = sessionId ? String(sessionId) : null;
     },
 
     setArchivedCount(count) {
@@ -110,6 +124,21 @@ const sessionStore = {
         this.sessionsById.forEach(function (sess, sid) {
             sess.stream_active = !!next[sid];
         });
+    },
+
+    setRun(sessionId, run) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        if (run) this.runsBySession.set(sid, run);
+        else this.runsBySession.delete(sid);
+    },
+
+    getRun(sessionId) {
+        return this.runsBySession.get(String(sessionId || '')) || null;
+    },
+
+    hasRun(sessionId) {
+        return this.runsBySession.has(String(sessionId || ''));
     },
 };
 

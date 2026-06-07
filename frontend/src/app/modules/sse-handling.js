@@ -143,15 +143,15 @@ async function startContinueAfterSubagents(sessionId) {
         const preCount = await getUiEventCount();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
-        if (runningBySession[runSessionId] && runningBySession[runSessionId].ctx) {
-            runCtx = runningBySession[runSessionId].ctx;
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
+            runCtx = getSessionRunState(runSessionId).ctx;
         } else {
             runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
             resetLlmState(runCtx);
             finalizeLlmStreamChunks(runCtx);
         }
         const ac = new AbortController();
-        runningBySession[runSessionId] = { controller: ac, ctx: runCtx };
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -175,7 +175,7 @@ async function startContinueAfterSubagents(sessionId) {
                 scrollProcessBodyToBottom(runCtx, runSessionId);
                 scrollChatToBottomIfFollow(runSessionId, {});
             }
-            if (runningBySession[runSessionId]) delete runningBySession[runSessionId];
+            if (getSessionRunState(runSessionId)) clearSessionRunState(runSessionId);
             setSendButtonState();
             syncSessionListIndicatorClasses();
             await refreshSingleSessionRow(runSessionId);
@@ -190,7 +190,7 @@ async function startContinueAfterSubagents(sessionId) {
 
 async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
-    if (!sessionId || runningBySession[sessionId]) return;
+    if (!sessionId || getSessionRunState(sessionId)) return;
     if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
@@ -217,7 +217,7 @@ async function attachSessionEventStream(sessionId, opts) {
         resetLlmState(runCtx);
         finalizeLlmStreamChunks(runCtx);
         const ac = new AbortController();
-        runningBySession[runSessionId] = { controller: ac, ctx: runCtx, reattached: true };
+        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -235,8 +235,8 @@ async function attachSessionEventStream(sessionId, opts) {
             finalizeLlmStreamChunks(runCtx);
             finalizeProgressStreamChunks(runCtx);
         }
-        if (runningBySession[runSessionId] && runningBySession[runSessionId].reattached) {
-            delete runningBySession[runSessionId];
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
+            clearSessionRunState(runSessionId);
         }
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -333,7 +333,7 @@ async function sendMessage() {
     finalizeLlmStreamChunks(runCtx);
     sealProcessGroup(runCtx);
     const ac = new AbortController();
-    runningBySession[runSessionId] = { controller: ac, ctx: runCtx };
+    setSessionRunState(runSessionId, { controller: ac, ctx: runCtx });
     setSendButtonState();
     syncSessionListIndicatorClasses();
     if (!switchedAway) {
@@ -383,8 +383,8 @@ async function sendMessage() {
         } else {
             updateSubagentContinueBanner(runSessionId);
         }
-        if (runningBySession[runSessionId]) {
-            delete runningBySession[runSessionId];
+        if (getSessionRunState(runSessionId)) {
+            clearSessionRunState(runSessionId);
             if (runSessionId !== currentSessionId) {
                 const el = runCtx.stream;
                 if (el && el.parentNode) el.remove();

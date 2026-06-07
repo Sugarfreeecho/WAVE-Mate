@@ -17,7 +17,7 @@ async function requestInterrupt(sessionId) {
 
 function pauseCurrentRun() {
     if (!currentSessionId) return;
-    const run = runningBySession[currentSessionId];
+    const run = getSessionRunState(currentSessionId);
     const sid = currentSessionId;
     suppressSessionServerStreamActive(sid);
     if (!run) {
@@ -30,7 +30,7 @@ function pauseCurrentRun() {
     /* 先同步 abort 本地 fetch 与从 runningBySession 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
     try { run.controller.abort(); } catch (e) { /* ignore */ }
-    delete runningBySession[sid];
+    clearSessionRunState(sid);
     setSendButtonState();
     syncSessionListIndicatorClasses();
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
@@ -266,10 +266,10 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             if (!okDel) return;
             await requestInterrupt(sess.id);
             if (isSessionRunning(sess.id)) {
-                try { runningBySession[sess.id].controller.abort(); } catch (err) { /* ignore */ }
-                const r = runningBySession[sess.id];
+                const r = getSessionRunState(sess.id);
+                try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
                 if (r && r.ctx && r.ctx.stream && r.ctx.stream.parentNode) r.ctx.stream.remove();
-                delete runningBySession[sess.id];
+                clearSessionRunState(sess.id);
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
@@ -444,6 +444,7 @@ const uiEventCountCache = {
 async function loadSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++sessionListLoadEpoch;
+    sessionStore.ui.loadingSessions = true;
     try {
         // 检查缓存
         const cachedData = opts.force ? null : sessionListCache.get();
@@ -470,11 +471,11 @@ async function loadSessions(opts) {
             // 更新缓存
             sessionListCache.set(allSessions);
         }
-        sessionStore.applySnapshot(allSessions, archivedSessionsCount);
+        applySessionSnapshot({ sessions: allSessions, archived_count: archivedSessionsCount });
         syncArchivedSessionStateFromStore();
         allSessions = sessionStore.list();
         
-        const nextStreamMap = Object.create(null);
+        let nextStreamMap = Object.create(null);
         const idSet = new Set();
         for (let si = 0; si < allSessions.length; si += 1) {
             if (allSessions[si] && allSessions[si].id) idSet.add(allSessions[si].id);
@@ -483,6 +484,12 @@ async function loadSessions(opts) {
             if (!idSet.has(uid)) sessionUnreadComplete.delete(uid);
         });
         persistSessionUnread();
+
+        nextStreamMap = renderSessionListFromStore();
+        applyServerStreamActiveMap(nextStreamMap);
+        renderSessionTitleFromStore();
+        sessionStore.ui.loadingSessions = false;
+        return;
 
         const pinnedList = [];
         const normalList = [];
@@ -496,8 +503,6 @@ async function loadSessions(opts) {
             else if (pin) pinnedList.push(s);
             else normalList.push(s);
         }
-
-        sessionsList.innerHTML = '';
 
         function appendSection(sectionKey, title, list) {
             if (!list.length && sectionKey !== 'archived') return;
@@ -567,6 +572,7 @@ async function loadSessions(opts) {
         applyServerStreamActiveMap(nextStreamMap);
         updateSessionTitle();
     } catch (error) {
+        sessionStore.ui.loadingSessions = false;
         console.error('加载会话列表失败:', error);
         appendLogVisible('加载会话列表失败', 'error-log');
     }
@@ -576,6 +582,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
     const loadToken = ++messageLoadEpoch;
+    sessionStore.ui.loadingMessages = true;
     suppressTocDuringSessionLoad = true;
     replayingMessages = true;
     resetSessionHistoryPaging();
@@ -662,6 +669,7 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         document.getElementById('chat-loading')?.remove();
         appendLogVisible('加载历史消息失败', 'error-log');
     } finally {
+        if (loadToken === messageLoadEpoch) sessionStore.ui.loadingMessages = false;
         if (loadToken === messageLoadEpoch) suppressTocDuringSessionLoad = false;
         if (loadToken === messageLoadEpoch) replayingMessages = false;
     }
@@ -683,7 +691,7 @@ async function switchSession(sessionId) {
     prepareStashLeaving(leaving);
     hideSubagentContinueBanner();
     resetSubagentPanelForSession();
-    currentSessionId = sessionId;
+    setCurrentSessionState(sessionId);
     localStorage.setItem('lastSessionId', sessionId);
     restoreInputDraft(sessionId);
     syncSessionListIndicatorClasses();
@@ -746,7 +754,7 @@ async function createNewSessionInner() {
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
-        currentSessionId = data.session_id;
+        setCurrentSessionState(data.session_id);
         localStorage.setItem('lastSessionId', currentSessionId);
         restoreInputDraft(currentSessionId);
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
