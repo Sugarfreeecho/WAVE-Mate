@@ -264,14 +264,29 @@ function runTasksWithConcurrency(items, limit, worker) {
     return Promise.all(starters);
 }
 
+function setSubagentCardEventCount(agentId, count) {
+    var aid = String(agentId || '');
+    var n = Number(count);
+    if (!aid || !Number.isFinite(n)) return;
+    n = Math.max(0, n);
+    subagentCardEventCount[aid] = n;
+    if (currentSessionId) subagentStore.setEventCount(currentSessionId, aid, n);
+}
+
+function bumpSubagentCardEventCount(agentId, eventIndex, increment) {
+    var aid = String(agentId || '');
+    if (!aid) return;
+    if (typeof eventIndex === 'number' && eventIndex >= 0) {
+        setSubagentCardEventCount(aid, Math.max(subagentCardEventCount[aid] || 0, eventIndex + 1));
+    } else if (increment) {
+        setSubagentCardEventCount(aid, (subagentCardEventCount[aid] || 0) + 1);
+    }
+}
+
 function trackSubagentStreamEventLightweight(card, agentId, event, eventIndex) {
     if (!card || !agentId || !event) return;
     var t = event.type;
-    if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-    } else if (!event.ephemeral) {
-        subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-    }
+    bumpSubagentCardEventCount(agentId, eventIndex, !event.ephemeral);
     if (t === 'context_tokens') {
         card.dataset.procCtxEstimated = String(event.estimated);
         card.dataset.procCtxThreshold = String(event.threshold);
@@ -582,6 +597,7 @@ function openSubagentPanel() {
 }
 
 function resetSubagentPanelForSession() {
+    if (currentSessionId) clearSubagentStateForSession(currentSessionId);
     cancelScheduledSubagentTreeRefresh();
     disconnectSubagentCardViewportObserver();
     if (subagentContinueBannerTimer) {
@@ -1286,6 +1302,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
     if (!agentId || !event || typeof event !== 'object') return false;
     var t = event.type;
     if (t === 'subagent_start') {
+        if (currentSessionId) applySubagentLifecycleToStore(currentSessionId, event);
         upsertSubagentCardFromStartEvent(event);
         if (!replayingMessages) {
             hideSubagentContinueBanner();
@@ -1294,6 +1311,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
         return true;
     }
     if (t === 'subagent_finish') {
+        if (currentSessionId) applySubagentLifecycleToStore(currentSessionId, event);
         var cardFin = document.querySelector('.subagent-grid-card[data-agent-id="' + agentId + '"]');
         if (cardFin) {
             if (event.result_preview) cardFin.dataset.resultPreview = String(event.result_preview);
@@ -1343,11 +1361,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
                 body.dataset.cacheClean = '1';
             }
         }
-        if (typeof eventIndex === 'number' && eventIndex >= 0) {
-            subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-        } else if (!event.ephemeral) {
-            subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-        }
+        bumpSubagentCardEventCount(agentId, eventIndex, !event.ephemeral);
         scheduleSubagentCardStats(card);
         return true;
     }
@@ -1378,9 +1392,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
             }
             if (event.react_iter != null) bumpAggregateMaxReactIter(card, event.react_iter);
             markSubagentTurnHasProcess(ctx.currentTurn);
-            if (typeof eventIndex === 'number' && eventIndex >= 0) {
-                subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-            }
+            bumpSubagentCardEventCount(agentId, eventIndex, false);
             scheduleSubagentCardStats(card);
             return true;
         }
@@ -1401,20 +1413,14 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
             scheduleSubagentCardStats(card);
         }
         markSubagentTurnHasProcess(ctx.currentTurn);
-        if (typeof eventIndex === 'number' && eventIndex >= 0) {
-            subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-        }
+        bumpSubagentCardEventCount(agentId, eventIndex, false);
         scheduleSubagentCardStats(card);
         followStreamProcessScroll(ctx, agentId);
         return true;
     } else {
         dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId);
     }
-    if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-    } else {
-        subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-    }
+    bumpSubagentCardEventCount(agentId, eventIndex, true);
     scheduleSubagentCardStats(card);
     followStreamProcessScroll(ctx, agentId);
     return true;
@@ -1454,7 +1460,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
         /* 父 SSE 在跑：本次只更新计数（让按钮 badge 与状态点保持），不重渲染 body。
            待父 SSE 结束（isSessionRunning 转 false），下一轮会以 fresh prevCount 继续。 */
         if (parentRunning && body.dataset.loaded === '1') {
-            subagentCardEventCount[agentId] = total;
+            setSubagentCardEventCount(agentId, total);
             return;
         }
         var msgResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages');
@@ -1462,7 +1468,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
         var events = normalizeSubagentMessagesPayload(await msgResp.json());
         if (!body.isConnected) return;
         if (events.length <= prevCount) {
-            subagentCardEventCount[agentId] = events.length;
+            setSubagentCardEventCount(agentId, events.length);
             return;
         }
         var gotFinal = false;
@@ -1484,7 +1490,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
             } else {
                 renderSubagentProcessEvents(body, card, events, agentId);
             }
-            subagentCardEventCount[agentId] = events.length;
+            setSubagentCardEventCount(agentId, events.length);
             if (gotFinal) markSubagentCardCompleted(card, true);
             return;
         }
@@ -1497,13 +1503,14 @@ async function incrementalSyncSubagentCard(agentId, card) {
         }
         /* 不在轮询路径里 finalize 流块：finalize 由 SSE 的 [DONE] 或 subagent_finish 触发。 */
         rebindSubagentCardBody(body, card, agentId);
-        subagentCardEventCount[agentId] = events.length;
+        setSubagentCardEventCount(agentId, events.length);
         if (gotFinal) markSubagentCardCompleted(card, true);
     } catch (e) { /* ignore */ }
 }
 
 function handleSubagentLifecycleEvent(event) {
     if (!event || !currentSessionId) return;
+    applySubagentLifecycleToStore(currentSessionId, event);
     /* 历史回放：不亮按钮 / 不写 grid / 不触发 schedule，全部交给 refreshSubagentTreePanel。 */
     if (replayingMessages) return;
     if (event.type === 'subagent_start') {
@@ -1621,7 +1628,7 @@ function renderSubagentProcessEvents(bodyEl, hostEl, events, agentId, eventIndex
         finalizeLlmStreamChunks(ctx);
         finalizeProgressStreamChunks(ctx);
         rebindSubagentCardBody(bodyEl, hostEl, agentId);
-        subagentCardEventCount[agentId] = (events || []).length;
+        setSubagentCardEventCount(agentId, (events || []).length);
         delete bodyEl.dataset.streamReady;
         delete bodyEl.dataset.rendering;
         refreshSubagentProcessChunksLightly(bodyEl);
@@ -1881,6 +1888,7 @@ function bindSubagentGridActions(grid, sessionId) {
                     return;
                 }
                 forgetSubagentBodyCache(sessionId, aid);
+                subagentStore.remove(sessionId, aid);
                 delete subagentCardEventCount[aid];
                 delete subagentCardLoadQueued[aid];
                 var card = btn.closest('.subagent-grid-card');
@@ -2115,7 +2123,7 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
         el.dataset.loaded = '1';
         delete el.dataset.streamReady;
         // 对于折叠模式，事件计数使用实际加载的数量
-        subagentCardEventCount[agentId] = events.length;
+        setSubagentCardEventCount(agentId, events.length);
     } catch (e) {
         if (!el.isConnected) return;
         el.innerHTML = '<div class="subagent-detail-empty">加载失败: ' + escapeHtml(String(e)) + '</div>';
@@ -2165,6 +2173,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;
         var data = await resp.json();
         var flat = (data && data.subagents) ? data.subagents : [];
+        applySubagentSnapshot(sessionId, flat);
         if (!flat.length) {
             if (toggleBtn) toggleBtn.classList.add('hidden');
             closeSubagentPanel();
@@ -2271,4 +2280,3 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-

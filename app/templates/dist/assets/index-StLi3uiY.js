@@ -1,4 +1,4 @@
-(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const l of o)if(l.type==="childList")for(const u of l.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const l={};return o.integrity&&(l.integrity=o.integrity),o.referrerPolicy&&(l.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?l.credentials="include":o.crossOrigin==="anonymous"?l.credentials="omit":l.credentials="same-origin",l}function p(o){if(o.ep)return;o.ep=!0;const l=f(o);fetch(o.href,l)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,s=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{s&&clearTimeout(s)}var r=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!r.ok){if(r&&r.cancelled)return null;var d=r&&r.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(d))return null;throw new Error(d)}return i?Array.isArray(r.paths)?r.paths:r.path?[r.path]:[]:r.path||null}async function o(n,e,i,a,s){n.disabled=!0;try{var t=await p(e,i||"",!!s);a&&a(t)}catch{return}finally{n.disabled=!1}}function l(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var s=n.parentNode;if(!s)return n;s.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var r=i||"浏览路径";return t.setAttribute("aria-label",r),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",r),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=r,t.addEventListener("click",function(d){d.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var b=Array.isArray(v)?v[0]||"":String(v);b&&(n.value=b,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function S(n,e){var i=n.selectionStart,a=n.selectionEnd,s=n.value.slice(0,i),t=n.value.slice(a),r=String(e||"");s.length&&!/\s$/.test(s)&&(r=" "+r),t.length&&!/^\s/.test(t)&&(r=r+" "),n.value=s+r+t;var d=s.length+r.length;n.selectionStart=n.selectionEnd=d,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(s){var t=Array.isArray(s)?s:s?[s]:[];if(t.length){var r=t.map(function(d){return l(d)}).join(" ");S(e,r)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],s=a.getAttribute("data-path-kind");(s==="file"||s==="directory")&&u(a,s)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const x=`// ═══════════════════════════════════════════════════════════
+(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,s=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{s&&clearTimeout(s)}var r=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!r.ok){if(r&&r.cancelled)return null;var l=r&&r.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(r.paths)?r.paths:r.path?[r.path]:[]:r.path||null}async function o(n,e,i,a,s){n.disabled=!0;try{var t=await p(e,i||"",!!s);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var s=n.parentNode;if(!s)return n;s.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var r=i||"浏览路径";return t.setAttribute("aria-label",r),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",r),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=r,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var S=Array.isArray(v)?v[0]||"":String(v);S&&(n.value=S,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,s=n.value.slice(0,i),t=n.value.slice(a),r=String(e||"");s.length&&!/\s$/.test(s)&&(r=" "+r),t.length&&!/^\s/.test(t)&&(r=r+" "),n.value=s+r+t;var l=s.length+r.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(s){var t=Array.isArray(s)?s:s?[s]:[];if(t.length){var r=t.map(function(l){return d(l)}).join(" ");b(e,r)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],s=a.getAttribute("data-path-kind");(s==="file"||s==="directory")&&u(a,s)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const x=`// ═══════════════════════════════════════════════════════════
 // MyAgent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
@@ -699,7 +699,229 @@ function appendArchiveLoadButton(body) {
 function renderSessionTitleFromStore() {
     updateSessionTitle();
 }
-`,L=`function formatTokenCompact(n) {
+`,L=`const messageStore = {
+    sessions: new Map(),
+
+    ensureSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return null;
+        let st = this.sessions.get(sid);
+        if (!st) {
+            st = {
+                sessionId: sid,
+                events: [],
+                eventsByIndex: new Map(),
+                processEvents: [],
+                messageEvents: [],
+                rangeStart: 0,
+                rangeEnd: 0,
+                total: 0,
+                loadedAt: 0,
+            };
+            this.sessions.set(sid, st);
+        }
+        return st;
+    },
+
+    clearSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sessions.delete(sid);
+    },
+
+    beginReplay(sessionId, meta) {
+        const st = this.ensureSession(sessionId);
+        if (!st) return null;
+        st.events = [];
+        st.eventsByIndex = new Map();
+        st.processEvents = [];
+        st.messageEvents = [];
+        st.rangeStart = Number(meta && meta.range_start) || 0;
+        st.rangeEnd = Number(meta && meta.range_end) || 0;
+        st.total = Number(meta && meta.total) || 0;
+        st.loadedAt = Date.now();
+        return st;
+    },
+
+    applyEvent(sessionId, event, eventIndex, source) {
+        const st = this.ensureSession(sessionId);
+        if (!st || !event || typeof event !== 'object') return null;
+        const idx = Number.isFinite(Number(eventIndex)) ? Number(eventIndex) : st.events.length;
+        const prevRecord = st.eventsByIndex.get(idx) || null;
+        const record = {
+            index: idx,
+            type: String(event.type || ''),
+            event: event,
+            source: source || 'unknown',
+            at: Date.now(),
+        };
+        st.eventsByIndex.set(idx, record);
+        const lastRecord = st.events.length ? st.events[st.events.length - 1] : null;
+        if (!prevRecord && (!lastRecord || idx > lastRecord.index)) {
+            st.events.push(record);
+            if (record.type === 'user' || record.type === 'final') st.messageEvents.push(record);
+            else st.processEvents.push(record);
+        } else {
+            st.events = Array.from(st.eventsByIndex.keys()).sort(function (a, b) { return a - b; })
+                .map(function (key) { return st.eventsByIndex.get(key); });
+            st.messageEvents = [];
+            st.processEvents = [];
+            st.events.forEach(function (item) {
+                if (item.type === 'user' || item.type === 'final') st.messageEvents.push(item);
+                else st.processEvents.push(item);
+            });
+        }
+        st.rangeEnd = Math.max(st.rangeEnd || 0, idx + 1);
+        st.total = Math.max(st.total || 0, st.rangeEnd);
+        return record;
+    },
+
+    getSession(sessionId) {
+        return this.sessions.get(String(sessionId || '')) || null;
+    },
+};
+
+function beginMessageReplay(sessionId, meta) {
+    return messageStore.beginReplay(sessionId, meta);
+}
+
+function clearMessageStateForSession(sessionId) {
+    messageStore.clearSession(sessionId);
+}
+
+function applyMessageEvent(sessionId, event, eventIndex, source) {
+    return messageStore.applyEvent(sessionId, event, eventIndex, source);
+}
+`,k=`const subagentStore = {
+    sessions: new Map(),
+
+    ensureSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return null;
+        let st = this.sessions.get(sid);
+        if (!st) {
+            st = {
+                sessionId: sid,
+                itemsById: new Map(),
+                order: [],
+                runningIds: new Set(),
+                pendingResultIds: new Set(),
+                eventCountsById: new Map(),
+                snapshotLoaded: false,
+                updatedAt: 0,
+            };
+            this.sessions.set(sid, st);
+        }
+        return st;
+    },
+
+    clearSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sessions.delete(sid);
+    },
+
+    applySnapshot(sessionId, flat) {
+        const st = this.ensureSession(sessionId);
+        if (!st) return null;
+        const list = Array.isArray(flat) ? flat : [];
+        const nextById = new Map();
+        const nextOrder = [];
+        const nextRunning = new Set();
+        const nextPending = new Set();
+        list.forEach(function (node) {
+            if (!node || !node.id) return;
+            const id = String(node.id);
+            const prev = st.itemsById.get(id) || {};
+            const merged = Object.assign({}, prev, node, { id: id });
+            nextById.set(id, merged);
+            nextOrder.push(id);
+            if (merged.running) nextRunning.add(id);
+            if (merged.pending_continue || merged.pending_result || merged.can_continue) nextPending.add(id);
+        });
+        st.itemsById = nextById;
+        st.order = nextOrder;
+        st.runningIds = nextRunning;
+        st.pendingResultIds = nextPending;
+        st.snapshotLoaded = true;
+        st.updatedAt = Date.now();
+        return st;
+    },
+
+    applyLifecycleEvent(sessionId, event) {
+        const st = this.ensureSession(sessionId);
+        if (!st || !event || typeof event !== 'object') return null;
+        const id = String(event.agent_id || event.run_id || '');
+        if (!id) return null;
+        const prev = st.itemsById.get(id) || { id: id };
+        const next = Object.assign({}, prev, {
+            id: id,
+            description: event.description || prev.description || id,
+            subagent_type: event.subagent_type || prev.subagent_type || '',
+            updated_at: Date.now(),
+        });
+        if (event.type === 'subagent_start' || event.type === 'subagent_started') {
+            next.running = true;
+            next.status = 'running';
+            st.runningIds.add(id);
+            st.pendingResultIds.delete(id);
+        } else if (event.type === 'subagent_finish' || event.type === 'subagent_finished') {
+            next.running = false;
+            next.status = event.ok === false ? 'failed' : 'finished';
+            if (event.result_preview) next.result_preview = String(event.result_preview);
+            if (event.error) next.error = String(event.error);
+            st.runningIds.delete(id);
+            st.pendingResultIds.add(id);
+        }
+        st.itemsById.set(id, next);
+        if (st.order.indexOf(id) < 0) st.order.unshift(id);
+        st.updatedAt = Date.now();
+        return next;
+    },
+
+    remove(sessionId, agentId) {
+        const st = this.ensureSession(sessionId);
+        const id = String(agentId || '');
+        if (!st || !id) return;
+        st.itemsById.delete(id);
+        st.runningIds.delete(id);
+        st.pendingResultIds.delete(id);
+        st.eventCountsById.delete(id);
+        st.order = st.order.filter(function (x) { return x !== id; });
+        st.updatedAt = Date.now();
+    },
+
+    setEventCount(sessionId, agentId, count) {
+        const st = this.ensureSession(sessionId);
+        const id = String(agentId || '');
+        const n = Number(count);
+        if (!st || !id || !Number.isFinite(n)) return;
+        st.eventCountsById.set(id, Math.max(0, n));
+    },
+
+    getEventCount(sessionId, agentId) {
+        const st = this.sessions.get(String(sessionId || ''));
+        if (!st) return 0;
+        return Number(st.eventCountsById.get(String(agentId || '')) || 0);
+    },
+
+    getSession(sessionId) {
+        return this.sessions.get(String(sessionId || '')) || null;
+    },
+};
+
+function applySubagentSnapshot(sessionId, flat) {
+    return subagentStore.applySnapshot(sessionId, flat);
+}
+
+function applySubagentLifecycleToStore(sessionId, event) {
+    return subagentStore.applyLifecycleEvent(sessionId, event);
+}
+
+function clearSubagentStateForSession(sessionId) {
+    subagentStore.clearSession(sessionId);
+}
+`,_=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -1876,7 +2098,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,k=`function ensureUiHoverTooltipEl() {
+`,P=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2262,7 +2484,7 @@ async function refreshTodoPlanPanel() {
     }
 }
 
-`,_=`function removeMessagesFromNode(startWrap) {
+`,A=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -4723,7 +4945,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,P=`var subagentCardSyncTimer = null;
+`,B=`var subagentCardSyncTimer = null;
 var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
@@ -4989,14 +5211,29 @@ function runTasksWithConcurrency(items, limit, worker) {
     return Promise.all(starters);
 }
 
+function setSubagentCardEventCount(agentId, count) {
+    var aid = String(agentId || '');
+    var n = Number(count);
+    if (!aid || !Number.isFinite(n)) return;
+    n = Math.max(0, n);
+    subagentCardEventCount[aid] = n;
+    if (currentSessionId) subagentStore.setEventCount(currentSessionId, aid, n);
+}
+
+function bumpSubagentCardEventCount(agentId, eventIndex, increment) {
+    var aid = String(agentId || '');
+    if (!aid) return;
+    if (typeof eventIndex === 'number' && eventIndex >= 0) {
+        setSubagentCardEventCount(aid, Math.max(subagentCardEventCount[aid] || 0, eventIndex + 1));
+    } else if (increment) {
+        setSubagentCardEventCount(aid, (subagentCardEventCount[aid] || 0) + 1);
+    }
+}
+
 function trackSubagentStreamEventLightweight(card, agentId, event, eventIndex) {
     if (!card || !agentId || !event) return;
     var t = event.type;
-    if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-    } else if (!event.ephemeral) {
-        subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-    }
+    bumpSubagentCardEventCount(agentId, eventIndex, !event.ephemeral);
     if (t === 'context_tokens') {
         card.dataset.procCtxEstimated = String(event.estimated);
         card.dataset.procCtxThreshold = String(event.threshold);
@@ -5307,6 +5544,7 @@ function openSubagentPanel() {
 }
 
 function resetSubagentPanelForSession() {
+    if (currentSessionId) clearSubagentStateForSession(currentSessionId);
     cancelScheduledSubagentTreeRefresh();
     disconnectSubagentCardViewportObserver();
     if (subagentContinueBannerTimer) {
@@ -6011,6 +6249,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
     if (!agentId || !event || typeof event !== 'object') return false;
     var t = event.type;
     if (t === 'subagent_start') {
+        if (currentSessionId) applySubagentLifecycleToStore(currentSessionId, event);
         upsertSubagentCardFromStartEvent(event);
         if (!replayingMessages) {
             hideSubagentContinueBanner();
@@ -6019,6 +6258,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
         return true;
     }
     if (t === 'subagent_finish') {
+        if (currentSessionId) applySubagentLifecycleToStore(currentSessionId, event);
         var cardFin = document.querySelector('.subagent-grid-card[data-agent-id="' + agentId + '"]');
         if (cardFin) {
             if (event.result_preview) cardFin.dataset.resultPreview = String(event.result_preview);
@@ -6068,11 +6308,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
                 body.dataset.cacheClean = '1';
             }
         }
-        if (typeof eventIndex === 'number' && eventIndex >= 0) {
-            subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-        } else if (!event.ephemeral) {
-            subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-        }
+        bumpSubagentCardEventCount(agentId, eventIndex, !event.ephemeral);
         scheduleSubagentCardStats(card);
         return true;
     }
@@ -6103,9 +6339,7 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
             }
             if (event.react_iter != null) bumpAggregateMaxReactIter(card, event.react_iter);
             markSubagentTurnHasProcess(ctx.currentTurn);
-            if (typeof eventIndex === 'number' && eventIndex >= 0) {
-                subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-            }
+            bumpSubagentCardEventCount(agentId, eventIndex, false);
             scheduleSubagentCardStats(card);
             return true;
         }
@@ -6126,20 +6360,14 @@ function appendSubagentStreamEvent(agentId, event, eventIndex) {
             scheduleSubagentCardStats(card);
         }
         markSubagentTurnHasProcess(ctx.currentTurn);
-        if (typeof eventIndex === 'number' && eventIndex >= 0) {
-            subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-        }
+        bumpSubagentCardEventCount(agentId, eventIndex, false);
         scheduleSubagentCardStats(card);
         followStreamProcessScroll(ctx, agentId);
         return true;
     } else {
         dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId);
     }
-    if (typeof eventIndex === 'number' && eventIndex >= 0) {
-        subagentCardEventCount[agentId] = Math.max(subagentCardEventCount[agentId] || 0, eventIndex + 1);
-    } else {
-        subagentCardEventCount[agentId] = (subagentCardEventCount[agentId] || 0) + 1;
-    }
+    bumpSubagentCardEventCount(agentId, eventIndex, true);
     scheduleSubagentCardStats(card);
     followStreamProcessScroll(ctx, agentId);
     return true;
@@ -6179,7 +6407,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
         /* 父 SSE 在跑：本次只更新计数（让按钮 badge 与状态点保持），不重渲染 body。
            待父 SSE 结束（isSessionRunning 转 false），下一轮会以 fresh prevCount 继续。 */
         if (parentRunning && body.dataset.loaded === '1') {
-            subagentCardEventCount[agentId] = total;
+            setSubagentCardEventCount(agentId, total);
             return;
         }
         var msgResp = await fetch('/sessions/' + encodeURIComponent(agentId) + '/messages');
@@ -6187,7 +6415,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
         var events = normalizeSubagentMessagesPayload(await msgResp.json());
         if (!body.isConnected) return;
         if (events.length <= prevCount) {
-            subagentCardEventCount[agentId] = events.length;
+            setSubagentCardEventCount(agentId, events.length);
             return;
         }
         var gotFinal = false;
@@ -6209,7 +6437,7 @@ async function incrementalSyncSubagentCard(agentId, card) {
             } else {
                 renderSubagentProcessEvents(body, card, events, agentId);
             }
-            subagentCardEventCount[agentId] = events.length;
+            setSubagentCardEventCount(agentId, events.length);
             if (gotFinal) markSubagentCardCompleted(card, true);
             return;
         }
@@ -6222,13 +6450,14 @@ async function incrementalSyncSubagentCard(agentId, card) {
         }
         /* 不在轮询路径里 finalize 流块：finalize 由 SSE 的 [DONE] 或 subagent_finish 触发。 */
         rebindSubagentCardBody(body, card, agentId);
-        subagentCardEventCount[agentId] = events.length;
+        setSubagentCardEventCount(agentId, events.length);
         if (gotFinal) markSubagentCardCompleted(card, true);
     } catch (e) { /* ignore */ }
 }
 
 function handleSubagentLifecycleEvent(event) {
     if (!event || !currentSessionId) return;
+    applySubagentLifecycleToStore(currentSessionId, event);
     /* 历史回放：不亮按钮 / 不写 grid / 不触发 schedule，全部交给 refreshSubagentTreePanel。 */
     if (replayingMessages) return;
     if (event.type === 'subagent_start') {
@@ -6346,7 +6575,7 @@ function renderSubagentProcessEvents(bodyEl, hostEl, events, agentId, eventIndex
         finalizeLlmStreamChunks(ctx);
         finalizeProgressStreamChunks(ctx);
         rebindSubagentCardBody(bodyEl, hostEl, agentId);
-        subagentCardEventCount[agentId] = (events || []).length;
+        setSubagentCardEventCount(agentId, (events || []).length);
         delete bodyEl.dataset.streamReady;
         delete bodyEl.dataset.rendering;
         refreshSubagentProcessChunksLightly(bodyEl);
@@ -6606,6 +6835,7 @@ function bindSubagentGridActions(grid, sessionId) {
                     return;
                 }
                 forgetSubagentBodyCache(sessionId, aid);
+                subagentStore.remove(sessionId, aid);
                 delete subagentCardEventCount[aid];
                 delete subagentCardLoadQueued[aid];
                 var card = btn.closest('.subagent-grid-card');
@@ -6840,7 +7070,7 @@ async function loadSubagentDetailInto(el, agentId, hostEl, sessionIdOpt) {
         el.dataset.loaded = '1';
         delete el.dataset.streamReady;
         // 对于折叠模式，事件计数使用实际加载的数量
-        subagentCardEventCount[agentId] = events.length;
+        setSubagentCardEventCount(agentId, events.length);
     } catch (e) {
         if (!el.isConnected) return;
         el.innerHTML = '<div class="subagent-detail-empty">加载失败: ' + escapeHtml(String(e)) + '</div>';
@@ -6890,6 +7120,7 @@ async function refreshSubagentTreePanelInner(sessionId) {
         if (seq !== subagentPanelRefreshSeq || sessionId !== currentSessionId) return;
         var data = await resp.json();
         var flat = (data && data.subagents) ? data.subagents : [];
+        applySubagentSnapshot(sessionId, flat);
         if (!flat.length) {
             if (toggleBtn) toggleBtn.classList.add('hidden');
             closeSubagentPanel();
@@ -6996,9 +7227,16 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-
-`,A=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,R=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
+    var eventSessionId = runSessionId || currentSessionId || '';
+    if (eventSessionId) {
+        applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
+        if (event.type === 'subagent_start' || event.type === 'subagent_finish'
+            || event.type === 'subagent_started' || event.type === 'subagent_finished') {
+            applySubagentLifecycleToStore(eventSessionId, event);
+        }
+    }
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         sealProcessGroup(ctx);
@@ -7079,7 +7317,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,B=`function setSendButtonState() {
+`,F=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -7823,6 +8061,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         } else {
             events = [];
         }
+        beginMessageReplay(sessionId, pageMeta || {
+            total: events.length,
+            range_start: 0,
+            range_end: events.length,
+        });
         if (!opts.full && pageMeta) {
             sessionHistoryPaging = {
                 sessionId: sessionId,
@@ -7984,7 +8227,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,R=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,M=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8496,7 +8739,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,F=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,N=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -8735,8 +8978,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,M=[x,I,C,w,T,E,L,k,_,P,A,B,R,F];Function(`"use strict";
-`+M.join(`
+`,O=[x,I,C,w,T,E,L,k,_,P,A,B,R,F,M,N];Function(`"use strict";
+`+O.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();

@@ -1,5 +1,13 @@
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
+    var eventSessionId = runSessionId || currentSessionId || '';
+    if (eventSessionId) {
+        applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
+        if (event.type === 'subagent_start' || event.type === 'subagent_finish'
+            || event.type === 'subagent_started' || event.type === 'subagent_finished') {
+            applySubagentLifecycleToStore(eventSessionId, event);
+        }
+    }
     if (event.type === 'user') {
         if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
         sealProcessGroup(ctx);

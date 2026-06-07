@@ -742,6 +742,11 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
         } else {
             events = [];
         }
+        beginMessageReplay(sessionId, pageMeta || {
+            total: events.length,
+            range_start: 0,
+            range_end: events.length,
+        });
         if (!opts.full && pageMeta) {
             sessionHistoryPaging = {
                 sessionId: sessionId,
