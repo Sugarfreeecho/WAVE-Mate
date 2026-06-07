@@ -1077,12 +1077,13 @@ async function fetchSessionStreamActiveMap() {
     }
 }
 
-function maybeStartStreamPollForSession(sid) {
+function maybeStartStreamPollForSession(sid, opts) {
+    opts = opts || {};
     clearStreamPoll();
     if (!sid) return;
     if (!isServerStreamActive(sid)) return;
     if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
-        void attachSessionEventStream(sid);
+        void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
     let pollCount = 0;
     let MAX_POLL_COUNT = 20;

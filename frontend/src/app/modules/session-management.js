@@ -19,7 +19,7 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = runningBySession[currentSessionId];
     const sid = currentSessionId;
-    setSessionServerStreamActive(sid, false);
+    suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -692,7 +692,7 @@ async function switchSession(sessionId) {
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
-        maybeStartStreamPollForSession(sessionId);
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         return;
     }
     const vs = getVisibleChatStream();
@@ -713,7 +713,7 @@ async function switchSession(sessionId) {
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
-        maybeStartStreamPollForSession(sessionId);
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
     }, 20);
 }
 

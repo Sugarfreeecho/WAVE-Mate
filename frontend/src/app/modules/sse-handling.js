@@ -188,21 +188,28 @@ async function startContinueAfterSubagents(sessionId) {
     }
 }
 
-async function attachSessionEventStream(sessionId) {
+async function attachSessionEventStream(sessionId, opts) {
+    opts = opts || {};
     if (!sessionId || runningBySession[sessionId]) return;
     if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
     try {
         if (runSessionId !== currentSessionId) return;
-        await loadSessionMessages(runSessionId, 'saved-or-bottom');
-        if (runSessionId !== currentSessionId) return;
+        if (!opts.skipInitialLoad) {
+            await loadSessionMessages(runSessionId, 'saved-or-bottom');
+            if (runSessionId !== currentSessionId) return;
+        }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
             bindProcessAggregate(existingProcessGroup);
+            if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
+                existingProcessGroup.dataset.procStartedAt = String(procNow());
+                refreshProcessAggregateStats(existingProcessGroup);
+            }
             existingProcessGroup.classList.remove('is-collapsed');
             var top = existingProcessGroup.querySelector('.process-aggregate-top');
             if (top) top.setAttribute('aria-expanded', 'true');

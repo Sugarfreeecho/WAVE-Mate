@@ -415,9 +415,34 @@ function showUiAlert(opts) {
     },
 };
 
+const SESSION_STREAM_STOP_SUPPRESS_MS = 15000;
+const sessionStreamStopSuppressUntil = Object.create(null);
+
+function isSessionStreamStopSuppressed(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);
+    if (!until) return false;
+    if (Date.now() <= until) return true;
+    delete sessionStreamStopSuppressUntil[sid];
+    return false;
+}
+
+function suppressSessionServerStreamActive(sessionId, ms) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
+    sessionStore.setStreamActive(sid, false);
+    if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
+        serverStreamActiveBySession[sid] = false;
+    }
+}
+
 function setSessionServerStreamActive(sessionId, active) {
     const sid = String(sessionId || '');
     if (!sid) return;
+    if (!active) delete sessionStreamStopSuppressUntil[sid];
+    if (active && isSessionStreamStopSuppressed(sid)) active = false;
     sessionStore.setStreamActive(sid, !!active);
     if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
         serverStreamActiveBySession[sid] = !!active;
@@ -427,11 +452,19 @@ function setSessionServerStreamActive(sessionId, active) {
 function isServerStreamActive(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return false;
+    if (isSessionStreamStopSuppressed(sid)) return false;
     return sessionStore.isStreamActive(sid);
 }
 
 function applyServerStreamActiveMap(activeMap) {
-    const m = activeMap || Object.create(null);
+    const src = activeMap || Object.create(null);
+    const m = Object.create(null);
+    Object.keys(src).forEach(function (sid) {
+        var active = !!src[sid];
+        if (!active) delete sessionStreamStopSuppressUntil[sid];
+        if (active && isSessionStreamStopSuppressed(sid)) active = false;
+        m[sid] = active;
+    });
     sessionStore.applyStreamActiveMap(m);
     if (typeof serverStreamActiveBySession !== 'undefined') {
         serverStreamActiveBySession = m;
@@ -1516,12 +1549,13 @@ async function fetchSessionStreamActiveMap() {
     }
 }
 
-function maybeStartStreamPollForSession(sid) {
+function maybeStartStreamPollForSession(sid, opts) {
+    opts = opts || {};
     clearStreamPoll();
     if (!sid) return;
     if (!isServerStreamActive(sid)) return;
     if (!runningBySession[sid] && typeof attachSessionEventStream === 'function') {
-        void attachSessionEventStream(sid);
+        void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
     let pollCount = 0;
     let MAX_POLL_COUNT = 20;
@@ -6811,7 +6845,7 @@ function pauseCurrentRun() {
     if (!currentSessionId) return;
     const run = runningBySession[currentSessionId];
     const sid = currentSessionId;
-    setSessionServerStreamActive(sid, false);
+    suppressSessionServerStreamActive(sid);
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
@@ -7484,7 +7518,7 @@ async function switchSession(sessionId) {
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
-        maybeStartStreamPollForSession(sessionId);
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
         return;
     }
     const vs = getVisibleChatStream();
@@ -7505,7 +7539,7 @@ async function switchSession(sessionId) {
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
         void refreshSingleSessionRow(sessionId);
         setSendButtonState();
-        maybeStartStreamPollForSession(sessionId);
+        maybeStartStreamPollForSession(sessionId, { skipInitialLoad: true });
     }, 20);
 }
 
@@ -7741,21 +7775,28 @@ async function startContinueAfterSubagents(sessionId) {
     }
 }
 
-async function attachSessionEventStream(sessionId) {
+async function attachSessionEventStream(sessionId, opts) {
+    opts = opts || {};
     if (!sessionId || runningBySession[sessionId]) return;
     if (!isServerStreamActive(sessionId)) return;
     var runSessionId = sessionId;
     var runCtx = null;
     try {
         if (runSessionId !== currentSessionId) return;
-        await loadSessionMessages(runSessionId, 'saved-or-bottom');
-        if (runSessionId !== currentSessionId) return;
+        if (!opts.skipInitialLoad) {
+            await loadSessionMessages(runSessionId, 'saved-or-bottom');
+            if (runSessionId !== currentSessionId) return;
+        }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
             bindProcessAggregate(existingProcessGroup);
+            if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
+                existingProcessGroup.dataset.procStartedAt = String(procNow());
+                refreshProcessAggregateStats(existingProcessGroup);
+            }
             existingProcessGroup.classList.remove('is-collapsed');
             var top = existingProcessGroup.querySelector('.process-aggregate-top');
             if (top) top.setAttribute('aria-expanded', 'true');

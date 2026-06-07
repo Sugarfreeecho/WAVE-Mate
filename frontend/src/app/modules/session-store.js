@@ -93,9 +93,34 @@ const sessionStore = {
     },
 };
 
+const SESSION_STREAM_STOP_SUPPRESS_MS = 15000;
+const sessionStreamStopSuppressUntil = Object.create(null);
+
+function isSessionStreamStopSuppressed(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);
+    if (!until) return false;
+    if (Date.now() <= until) return true;
+    delete sessionStreamStopSuppressUntil[sid];
+    return false;
+}
+
+function suppressSessionServerStreamActive(sessionId, ms) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
+    sessionStore.setStreamActive(sid, false);
+    if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
+        serverStreamActiveBySession[sid] = false;
+    }
+}
+
 function setSessionServerStreamActive(sessionId, active) {
     const sid = String(sessionId || '');
     if (!sid) return;
+    if (!active) delete sessionStreamStopSuppressUntil[sid];
+    if (active && isSessionStreamStopSuppressed(sid)) active = false;
     sessionStore.setStreamActive(sid, !!active);
     if (typeof serverStreamActiveBySession !== 'undefined' && serverStreamActiveBySession) {
         serverStreamActiveBySession[sid] = !!active;
@@ -105,11 +130,19 @@ function setSessionServerStreamActive(sessionId, active) {
 function isServerStreamActive(sessionId) {
     const sid = String(sessionId || '');
     if (!sid) return false;
+    if (isSessionStreamStopSuppressed(sid)) return false;
     return sessionStore.isStreamActive(sid);
 }
 
 function applyServerStreamActiveMap(activeMap) {
-    const m = activeMap || Object.create(null);
+    const src = activeMap || Object.create(null);
+    const m = Object.create(null);
+    Object.keys(src).forEach(function (sid) {
+        var active = !!src[sid];
+        if (!active) delete sessionStreamStopSuppressUntil[sid];
+        if (active && isSessionStreamStopSuppressed(sid)) active = false;
+        m[sid] = active;
+    });
     sessionStore.applyStreamActiveMap(m);
     if (typeof serverStreamActiveBySession !== 'undefined') {
         serverStreamActiveBySession = m;
