@@ -284,6 +284,14 @@ def _materialize_lazy_work_messages(state: State) -> None:
     except Exception as e:
         logger.warning("lazy load work_messages failed: %s", e)
         prev = []
+    if prev and suffix:
+        try:
+            p = prev[-1]
+            s = suffix[0]
+            if type(p) is type(s) and getattr(p, "content", None) == getattr(s, "content", None):
+                suffix = suffix[1:]
+        except Exception:
+            pass
     state["work_messages"] = prev + suffix
 
 
@@ -2242,17 +2250,19 @@ async def astream_events(
     setup_logging(user_input, session_id or "")
     session_manager.reconcile_llm_work_to_ui_user_count(session_id, include_work=False)
     llm_history_dicts = session_manager._load_llm_history(session_id)
+    work_messages_dicts = session_manager._load_work_messages(session_id)
 
+    prev_work_messages = [_dict_to_message(m) for m in work_messages_dicts]
     prev_llm_history = [_dict_to_message(m) for m in llm_history_dicts]
 
     user_message = UserMessage(content=user_input)
 
+    new_work_messages = prev_work_messages + [user_message]
     new_llm_history = prev_llm_history + [user_message]
 
     state: State = {
         "dialogue": derive_dialogue_from_assistant_history(new_llm_history),
-        "work_messages": [user_message],
-        "_lazy_prepend_work_messages": True,
+        "work_messages": new_work_messages,
         "llm_history": new_llm_history,
         "user_input": user_input,
         "final_response": "",
