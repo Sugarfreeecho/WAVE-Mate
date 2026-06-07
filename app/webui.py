@@ -1228,7 +1228,7 @@ _ENV_HINTS: dict[str, str] = {
     "LOG_DIR": "日志输出目录。",
     "NODE_HOME": "可选：prepend 到子进程 PATH 的 Node 安装目录。",
     "NVM_SYMLINK": "nvm-windows 当前 node 的 symlink 目录（可选）。",
-    "RUN_SHELL_USE_BASH": "Windows 下是否优先用 Git Bash 执行 shell（0=强制 cmd）。",
+    "RUN_SHELL_USE_BASH": "Windows 下是否优先用 Git Bash 执行 shell（0=跳过 Git Bash，使用 PowerShell）。",
     "RUN_SHELL_BASH": "bash.exe 路径（可选）。",
     "MAX_REACT_ITER": "ReAct 主循环最大迭代轮数。",
     "VERBOSE_LOGGING": "是否输出更详细的运行日志。",

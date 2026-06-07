@@ -402,6 +402,8 @@ const sessionListCache = {
     }
 };
 
+let sessionListLoadEpoch = 0;
+let createNewSessionQueue = Promise.resolve();
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -430,6 +432,7 @@ const uiEventCountCache = {
 };
 
 async function loadSessions() {
+    const loadEpoch = ++sessionListLoadEpoch;
     try {
         // 检查缓存
         const cachedData = sessionListCache.get();
@@ -449,6 +452,7 @@ async function loadSessions() {
                 }
             }
             const sessions = await response.json();
+            if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(sessions) ? sessions : [];
             
             // 更新缓存
@@ -706,6 +710,14 @@ async function switchSession(sessionId) {
 }
 
 async function createNewSession() {
+    createNewSessionQueue = createNewSessionQueue.then(
+        function () { return createNewSessionInner(); },
+        function () { return createNewSessionInner(); }
+    );
+    return createNewSessionQueue;
+}
+
+async function createNewSessionInner() {
     try {
         saveChatScrollForSession(currentSessionId);
         stashInputDraft(currentSessionId);
@@ -721,6 +733,7 @@ async function createNewSession() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;
+        sessionListCache.invalidate();
         await loadSessions();
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);

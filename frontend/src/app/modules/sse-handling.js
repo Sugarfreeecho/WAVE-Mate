@@ -80,6 +80,7 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+                        if (isTemporaryStatus) removeTemporaryStatus(runCtx);
                         var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);
                         if (isTemporaryStatus && statusRow) {
                             statusRow.dataset.temporaryStatus = '1';

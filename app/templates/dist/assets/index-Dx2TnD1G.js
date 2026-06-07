@@ -6593,6 +6593,7 @@ function updateSubagentBlockFinish(ctx, event) {
         }
         // 临时状态消息处理：标记"正在思考中..."为临时状态
         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+        if (isTemporaryStatus) removeTemporaryStatus(ctx);
         var statusRow = appendLog(ctx, statusContent, 'status', runSessionId);
         if (isTemporaryStatus && statusRow) {
             statusRow.dataset.temporaryStatus = '1';
@@ -6614,7 +6615,6 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-
 `,L=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
@@ -7019,6 +7019,8 @@ const sessionListCache = {
     }
 };
 
+let sessionListLoadEpoch = 0;
+let createNewSessionQueue = Promise.resolve();
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -7047,6 +7049,7 @@ const uiEventCountCache = {
 };
 
 async function loadSessions() {
+    const loadEpoch = ++sessionListLoadEpoch;
     try {
         // 检查缓存
         const cachedData = sessionListCache.get();
@@ -7066,6 +7069,7 @@ async function loadSessions() {
                 }
             }
             const sessions = await response.json();
+            if (loadEpoch !== sessionListLoadEpoch) return;
             allSessions = Array.isArray(sessions) ? sessions : [];
             
             // 更新缓存
@@ -7323,6 +7327,14 @@ async function switchSession(sessionId) {
 }
 
 async function createNewSession() {
+    createNewSessionQueue = createNewSessionQueue.then(
+        function () { return createNewSessionInner(); },
+        function () { return createNewSessionInner(); }
+    );
+    return createNewSessionQueue;
+}
+
+async function createNewSessionInner() {
     try {
         saveChatScrollForSession(currentSessionId);
         stashInputDraft(currentSessionId);
@@ -7338,6 +7350,7 @@ async function createNewSession() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         setWelcome();
         replayingMessages = false;
+        sessionListCache.invalidate();
         await loadSessions();
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
@@ -7429,6 +7442,7 @@ async function createNewSession() {
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+                        if (isTemporaryStatus) removeTemporaryStatus(runCtx);
                         var statusRow = appendLog(runCtx, statusContent, 'status', runSessionId);
                         if (isTemporaryStatus && statusRow) {
                             statusRow.dataset.temporaryStatus = '1';

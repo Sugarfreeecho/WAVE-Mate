@@ -58,6 +58,7 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         }
         // 临时状态消息处理：标记"正在思考中..."为临时状态
         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;
+        if (isTemporaryStatus) removeTemporaryStatus(ctx);
         var statusRow = appendLog(ctx, statusContent, 'status', runSessionId);
         if (isTemporaryStatus && statusRow) {
             statusRow.dataset.temporaryStatus = '1';
@@ -79,4 +80,3 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-
