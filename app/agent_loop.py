@@ -56,7 +56,6 @@ from agent_harness import (
     strip_reasoning_for_api_request,
     resolve_executor_for_session,
     EXECUTOR_REASONING_EFFORT,
-    EXECUTOR_OMIT_TEMPERATURE,
     UserMessage,
     AssistantMessage,
     SystemMessage,
@@ -1107,7 +1106,6 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         extra_body=EXECUTOR_EXTRA_BODY,
                         parallel_tool_calls=True,
                         reasoning_effort=EXECUTOR_REASONING_EFFORT,
-                        omit_temperature=EXECUTOR_OMIT_TEMPERATURE,
                     )
                 )
                 stream_error: Optional[BaseException] = None
@@ -1245,7 +1243,6 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                         extra_body=EXECUTOR_EXTRA_BODY,
                         parallel_tool_calls=True,
                         reasoning_effort=EXECUTOR_REASONING_EFFORT,
-                        omit_temperature=EXECUTOR_OMIT_TEMPERATURE,
                     )
                     choice0 = api_resp.choices[0]
                     turn = parse_assistant_message(choice0.message)

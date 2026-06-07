@@ -385,6 +385,7 @@ async def _format_subagent_collect_result(parent_session_id: str, resume_raw: st
                     preview = str(n.get("result_preview") or "").strip()
                     break
             body = preview or "(无 final 输出；subagent 可能未完成或被中断)"
+        session_manager.clear_pending_subagent_results_by_agent_ids(parent_session_id, [child_id])
         return _format_subagent_result(
             child_session_id=child_id,
             description=desc,
@@ -430,6 +431,9 @@ async def _format_subagent_collect_result(parent_session_id: str, resume_raw: st
             desc = str(item.get("description") or "")
             result = str(item.get("result") or "").strip()
             lines.append(f"- {aid} ({desc}): {result[:4000]}")
+    read_ids = [str(n.get("id") or "").strip() for n in flat if not n.get("running")]
+    read_ids.extend(str(item.get("agent_id") or "").strip() for item in unconsumed)
+    session_manager.clear_pending_subagent_results_by_agent_ids(parent_session_id, read_ids)
     return "\n".join(lines).rstrip()
 
 

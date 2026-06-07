@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Callable, List, Literal, Optional, Tuple
+from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from agent_tokenizer import estimate_full_input_tokens_for_llm_history
 
@@ -621,6 +621,9 @@ def _compress_summary_round(
         key_context,
         prefix,
         stream_sink=_on_delta if hint_sink is not None else None,
+        hint_sink=hint_sink,
+        hints=hint_list,
+        session_id=session_id,
     )
     _push_progress_persist_body(hint_sink, summary, kind="summary")
     _push_progress_persist_body(hint_sink, key_body, kind="key")
@@ -957,6 +960,9 @@ def _run_compress_executor_dialogue(
     dialogue_msgs: List,
     *,
     stream_sink: Optional[Callable[[str], None]] = None,
+    hint_sink: Optional[Callable[[Any], None]] = None,
+    hints: Optional[List[str]] = None,
+    session_id: str = "",
 ) -> Tuple[str, str]:
     """组包 → trim → 执行端 chat（compress_history_and_key）→ 解析 recap + key。"""
     if not (key_context or "").strip() and not dialogue_msgs:
@@ -1012,10 +1018,34 @@ def _run_compress_executor_dialogue(
                         stream_sink(piece)
                 return recap, key_body
             logger.warning("compress_history_and_key 格式无效，已丢弃输出并准备重试 attempt=%s", attempt + 1)
+            _push_progress_hint(
+                hints if hints is not None else [],
+                hint_sink,
+                f"【上下文摘要】第 {attempt + 1} 次摘要输出格式无效，已丢弃并准备重试…",
+                kind="summary",
+                session_id=session_id,
+                with_pct=False,
+            )
         logger.warning("compress_history_and_key 重试后仍格式无效，改用摘录兜底")
+        _push_progress_hint(
+            hints if hints is not None else [],
+            hint_sink,
+            "【上下文摘要】摘要输出格式重试后仍无效，已改用摘录兜底。",
+            kind="summary",
+            session_id=session_id,
+            with_pct=False,
+        )
         return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
     except Exception as e:
         logger.warning("compress_history_and_key 调用失败: %s", e)
+        _push_progress_hint(
+            hints if hints is not None else [],
+            hint_sink,
+            f"【上下文摘要】摘要模型调用失败，已改用摘录兜底：{e}",
+            kind="summary",
+            session_id=session_id,
+            with_pct=False,
+        )
         return _compress_executor_excerpt_fallback(dialogue_msgs, suffix=suffix), ""
 
 
@@ -1292,12 +1322,24 @@ def _compress_unified_in_place(
             preview_llm_history=_preview_llm_for_ui_estimate(work),
             key_context=cur_key,
         )
-        while round_idx < int(CONTEXT_COMPRESS_MAX_ROUNDS):
+        max_summary_rounds = max(1, int(CONTEXT_COMPRESS_MAX_ROUNDS))
+        fallback_reason = "max_rounds"
+        while round_idx < max_summary_rounds:
             if _compress_ratio_reached(session_id, work, cur_key):
                 break
             round_idx += 1
             prefix, tail = _split_prefix_tail_for_summary_round(work, round_idx, tail_keep)
             if not prefix:
+                fallback_reason = "no_prefix"
+                _push_progress_hint(
+                    hints,
+                    hint_sink,
+                    "【上下文摘要】没有足够可摘要的历史前缀，已转入截尾兜底。",
+                    kind="summary",
+                    session_id=session_id,
+                    preview_llm_history=_preview_llm_for_ui_estimate(work),
+                    key_context=cur_key,
+                )
                 break
             try:
                 session_manager.backup_llm_compress_prefix(session_id, list(prefix))
@@ -1346,11 +1388,20 @@ def _compress_unified_in_place(
                 int(full_pack),
                 did_trunc,
             )
-            fb_hint = (
-                "【上下文摘要】摘要轮次已用尽，已丢弃更早对话（保留至多约半窗 token 的尾部）。"
-                if did_trunc
-                else "【上下文摘要】摘要轮次已用尽；对话已在半窗预算内未再截断。"
-            )
+            if fallback_reason == "no_prefix":
+                fb_hint = (
+                    "【上下文摘要】可摘要历史不足，已丢弃更早对话（保留至多约半窗 token 的尾部）。"
+                    if did_trunc
+                    else "【上下文摘要】可摘要历史不足；对话已在半窗预算内未再截断。"
+                )
+            else:
+                if did_trunc:
+                    fb_hint = (
+                        f"【上下文摘要】摘要轮次已用尽（已尝试 {round_idx}/{max_summary_rounds} 轮），"
+                        "已丢弃更早对话（保留至多约半窗 token 的尾部）。"
+                    )
+                else:
+                    fb_hint = f"【上下文摘要】摘要轮次已用尽（已尝试 {round_idx}/{max_summary_rounds} 轮）；对话已在半窗预算内未再截断。"
             _push_progress_hint(
                 hints,
                 hint_sink,

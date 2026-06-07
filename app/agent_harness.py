@@ -294,8 +294,6 @@ def _executor_reasoning_effort() -> Optional[str]:
 
 # 主模型：思考开时带 reasoning_effort，关时为 None
 EXECUTOR_REASONING_EFFORT: Optional[str] = _executor_reasoning_effort()
-# 思考开时不传 temperature（API 不生效，省字段）
-EXECUTOR_OMIT_TEMPERATURE: bool = _extra_body_thinking_enabled()
 
 
 def strip_reasoning_for_api_request(messages: List[Any]) -> List[Any]:
@@ -653,7 +651,7 @@ def refresh_executor_client_from_env() -> None:
     global CONTEXT_WINDOW, CONTEXT_KEEP_RECENT_TURNS, MAX_REACT_ITER, SUBAGENT_MAX_REACT_ITER, LLM_CONTEXT_TRUNCATE_KEEP_CHARS
     global CONTEXT_COMPRESS_FAILURE_MAX_TOKENS, CONTEXT_COMPRESS_MAX_ROUNDS, CONTEXT_COMPRESS_ROUND3_MAX_REACT
     global CONTEXT_COMPRESS_TARGET_RATIO
-    global EXECUTOR_EXTRA_BODY, EXECUTOR_REASONING_EFFORT, EXECUTOR_OMIT_TEMPERATURE
+    global EXECUTOR_EXTRA_BODY, EXECUTOR_REASONING_EFFORT
 
     load_app_dotenv()
 
@@ -704,7 +702,6 @@ def refresh_executor_client_from_env() -> None:
 
     EXECUTOR_EXTRA_BODY = _load_executor_extra_body()
     EXECUTOR_REASONING_EFFORT = _executor_reasoning_effort()
-    EXECUTOR_OMIT_TEMPERATURE = _extra_body_thinking_enabled()
 
     executor_client, executor_model = create_openai_client(
         EXECUTOR_LLM,
@@ -724,7 +721,6 @@ def refresh_executor_client_from_env() -> None:
     _agent_loop.CONTEXT_COMPRESS_FAILURE_MAX_TOKENS = CONTEXT_COMPRESS_FAILURE_MAX_TOKENS
     _agent_loop.EXECUTOR_EXTRA_BODY = EXECUTOR_EXTRA_BODY
     _agent_loop.EXECUTOR_REASONING_EFFORT = EXECUTOR_REASONING_EFFORT
-    _agent_loop.EXECUTOR_OMIT_TEMPERATURE = EXECUTOR_OMIT_TEMPERATURE
     _agent_loop.LLM_CONTEXT_TRUNCATE_KEEP_CHARS = LLM_CONTEXT_TRUNCATE_KEEP_CHARS
 
     _agent_memory.CONTEXT_WINDOW = CONTEXT_WINDOW
@@ -756,7 +752,6 @@ def executor_chat_complete(messages: List[Any]) -> str:
         tools=None,
         temperature=EXECUTOR_TEMPERATURE,
         max_tokens=MAX_OUTPUT_TOKENS,
-        omit_temperature=EXECUTOR_OMIT_TEMPERATURE,
     )
     return (parse_assistant_message(r.choices[0].message).content or "").strip()
 
@@ -782,7 +777,6 @@ def executor_chat_complete_stream(
             tools=None,
             temperature=EXECUTOR_TEMPERATURE,
             max_tokens=MAX_OUTPUT_TOKENS,
-            omit_temperature=EXECUTOR_OMIT_TEMPERATURE,
         )
 
     t = threading.Thread(target=_worker, daemon=True)
@@ -1915,6 +1909,29 @@ class SessionManager:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(keep, f, indent=2, ensure_ascii=False)
         return lines
+
+    def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
+        """清除已被显式读取/注入的 subagent pending 结果，避免续接横幅重复出现。"""
+        ids = {str(x or "").strip() for x in (agent_ids or []) if str(x or "").strip()}
+        if not ids:
+            return 0
+        rows = self._load_pending_subagent_results(session_id)
+        if not rows:
+            return 0
+        keep: List[dict] = []
+        removed = 0
+        for item in rows:
+            aid = str(item.get("agent_id") or item.get("task_id") or "").strip()
+            if aid in ids:
+                removed += 1
+                continue
+            keep.append(item)
+        if removed:
+            path = self._get_pending_subagent_results_path(session_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(keep, f, indent=2, ensure_ascii=False)
+        return removed
 
     def dismiss_pending_subagent_notifications(self, session_id: str) -> int:
         """用户关闭续接提示时，清除当前可注入的 pending subagent 通知。"""
@@ -3688,6 +3705,10 @@ class SessionManager:
 
         rows.sort(key=sort_key)
         return rows
+
+    def archived_session_count(self) -> int:
+        """Return the number of archived sessions without materializing session details."""
+        return sum(1 for s in self.index if s.get("archived"))
 
     def get_session_summary(self, session_id: str) -> Optional[dict]:
         """单条会话摘要（结构与 list_sessions 元素一致），不存在则 None。"""

@@ -254,6 +254,7 @@ def _attach_subagent_sidebar_fields(s: dict, session_id: str) -> None:
 @fastapi_app.get("/sessions")
 async def list_sessions(include_archived: bool = Query(False)):
     sessions = session_manager.list_sessions(include_archived=include_archived)
+    archived_count = session_manager.archived_session_count()
     _cleanup_stale_active_chat()
     for s in sessions:
         sid = s.get("id")
@@ -261,7 +262,10 @@ async def list_sessions(include_archived: bool = Query(False)):
             s["stream_active"] = _is_session_stream_active(str(sid))
         else:
             s["stream_active"] = False
-    return JSONResponse(content=sessions)
+    return JSONResponse(
+        content=sessions,
+        headers={"X-Archived-Count": str(archived_count)},
+    )
 
 @fastapi_app.get("/sessions/{session_id}")
 async def get_session_detail(

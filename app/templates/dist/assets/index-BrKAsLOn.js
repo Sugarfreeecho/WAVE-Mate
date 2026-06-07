@@ -7021,6 +7021,7 @@ const sessionListCache = {
 
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
+let archivedSessionsCount = 0;
 
 // 事件计数缓存，用于乐观更新
 const uiEventCountCache = {
@@ -7057,6 +7058,13 @@ async function loadSessions() {
         } else {
             // 从服务器获取数据
             const response = await fetch('/sessions');
+            const archivedCountHeader = response.headers.get('X-Archived-Count');
+            if (archivedCountHeader != null && archivedCountHeader !== '') {
+                const parsedArchivedCount = Number(archivedCountHeader);
+                if (Number.isFinite(parsedArchivedCount) && parsedArchivedCount >= 0) {
+                    archivedSessionsCount = parsedArchivedCount;
+                }
+            }
             const sessions = await response.json();
             allSessions = Array.isArray(sessions) ? sessions : [];
             
@@ -7091,6 +7099,9 @@ async function loadSessions() {
 
         function appendSection(sectionKey, title, list) {
             if (!list.length && sectionKey !== 'archived') return;
+            var displayCount = sectionKey === 'archived' && !archivedSessionsLoaded
+                ? archivedSessionsCount
+                : list.length;
             var expanded = sessionSectionExpanded(sectionKey);
             var sec = document.createElement('div');
             sec.className = 'session-section' + (expanded ? '' : ' is-collapsed');
@@ -7101,7 +7112,7 @@ async function loadSessions() {
             toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
             toggle.innerHTML = '<span class="session-section-toggle-label">' + escapeHtml(title) + '</span>'
                 + '<span class="session-section-meta">'
-                + '<span class="session-section-count">' + String(list.length) + '</span>'
+                + '<span class="session-section-count">' + String(displayCount) + '</span>'
                 + '<span class="session-section-chev" aria-hidden="true">▼</span>'
                 + '</span>';
             toggle.addEventListener('click', function (e) {
@@ -7129,6 +7140,7 @@ async function loadSessions() {
                         const all = Array.isArray(sessions) ? sessions : [];
                         archivedSessionsLoaded = true;
                         archivedSessionsCache = all.filter(function (s) { return s && s.id && !!s.archived; });
+                        archivedSessionsCount = archivedSessionsCache.length;
                         sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
                         await loadSessions();
                     } catch (err) {

@@ -4,7 +4,7 @@ OpenAI Chat Completions 适配层。
 负责把 agent_messages 中的消息转为 API 的 messages 列表，并解析 assistant 消息中的
 content / tool_calls / reasoning_content。
 
-主模型在思考开时由 harness 传 extra_body.thinking、reasoning_effort，且省略 temperature；
+主模型在思考开时由 harness 传 extra_body.thinking、reasoning_effort，并继续传 temperature；
 messages_to_openai_params 对每条 assistant 均带上 reasoning_content（可空串），兼容 DeepSeek thinking 多轮。
 """
 
