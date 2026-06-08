@@ -1,4 +1,4 @@
-(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,r=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{r&&clearTimeout(r)}var s=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!s.ok){if(s&&s.cancelled)return null;var l=s&&s.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(s.paths)?s.paths:s.path?[s.path]:[]:s.path||null}async function o(n,e,i,a,r){n.disabled=!0;try{var t=await p(e,i||"",!!r);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var r=n.parentNode;if(!r)return n;r.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var s=i||"浏览路径";return t.setAttribute("aria-label",s),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",s),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=s,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var S=Array.isArray(v)?v[0]||"":String(v);S&&(n.value=S,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,r=n.value.slice(0,i),t=n.value.slice(a),s=String(e||"");r.length&&!/\s$/.test(r)&&(s=" "+s),t.length&&!/^\s/.test(t)&&(s=s+" "),n.value=r+s+t;var l=r.length+s.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(r){var t=Array.isArray(r)?r:r?[r]:[];if(t.length){var s=t.map(function(l){return d(l)}).join(" ");b(e,s)}},!0)}))}function h(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],r=a.getAttribute("data-path-kind");(r==="file"||r==="directory")&&u(a,r)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:h},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){h(document)}):h(document)})(typeof window<"u"?window:globalThis);const I=`// ═══════════════════════════════════════════════════════════
+(function(){const c=document.createElement("link").relList;if(c&&c.supports&&c.supports("modulepreload"))return;for(const o of document.querySelectorAll('link[rel="modulepreload"]'))p(o);new MutationObserver(o=>{for(const d of o)if(d.type==="childList")for(const u of d.addedNodes)u.tagName==="LINK"&&u.rel==="modulepreload"&&p(u)}).observe(document,{childList:!0,subtree:!0});function f(o){const d={};return o.integrity&&(d.integrity=o.integrity),o.referrerPolicy&&(d.referrerPolicy=o.referrerPolicy),o.crossOrigin==="use-credentials"?d.credentials="include":o.crossOrigin==="anonymous"?d.credentials="omit":d.credentials="same-origin",d}function p(o){if(o.ep)return;o.ep=!0;const d=f(o);fetch(o.href,d)}})();(function(g){var c='<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"></path></svg>';function f(){if(!document.getElementById("myagent-path-picker-styles")){var n=document.createElement("style");n.id="myagent-path-picker-styles",n.textContent='.path-input-row{display:flex;align-items:stretch;gap:0.35rem;width:100%;}.path-input-row>.ip,.path-input-row>.tx,.path-input-row>input[type="text"],.path-input-row>input:not([type]){flex:1;min-width:0;}.path-browse-btn{flex-shrink:0;width:2.35rem;padding:0;border:1px solid var(--border-glass,rgba(255,255,255,.08));border-radius:var(--radius-sm,8px);background:var(--surface-glass2,rgba(40,40,60,.94));color:var(--text-secondary,#a6adc8);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .18s,border-color .18s,background .18s;}.path-browse-btn:hover{color:var(--text-primary,#cdd6f4);border-color:var(--border-brand-accent,rgba(124,111,247,.35));background:rgba(108,92,231,.12);}.path-browse-btn:disabled{opacity:.45;cursor:not-allowed;}.path-browse-btn--ghost{background:transparent;border-color:transparent;box-shadow:none;width:2.1rem;}.path-browse-btn--ghost:hover{background:rgba(108,92,231,.1);border-color:transparent;color:var(--accent-2,#d4b8fc);}.input-wrapper .path-browse-btn--ghost{align-self:center;margin-right:-0.15rem;}',document.head.appendChild(n)}}async function p(n,e,i){var a=typeof AbortController<"u"?new AbortController:null,r=a?setTimeout(function(){a.abort()},5e4):null,t;try{t=await fetch("/api/pick-path",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({kind:n||"directory",initial:e||"",multiple:!!i}),signal:a?a.signal:void 0})}finally{r&&clearTimeout(r)}var s=await t.json().catch(function(){return{ok:!1,error:"请求失败"}});if(!t.ok||!s.ok){if(s&&s.cancelled)return null;var l=s&&s.error||"无法打开选择对话框";if(/取消|cancelled|800704c7|2147023673/i.test(l))return null;throw new Error(l)}return i?Array.isArray(s.paths)?s.paths:s.path?[s.path]:[]:s.path||null}async function o(n,e,i,a,r){n.disabled=!0;try{var t=await p(e,i||"",!!r);a&&a(t)}catch{return}finally{n.disabled=!1}}function d(n){var e=String(n||"").trim();return e?((e.charAt(0)==='"'&&e.charAt(e.length-1)==='"'||e.charAt(0)==="'"&&e.charAt(e.length-1)==="'")&&(e=e.slice(1,-1)),'"'+e.replace(/"/g,'\\"')+'"'):""}function u(n,e,i){if(!n||n.dataset.pathBrowseWrapped==="1")return n;f();var a=document.createElement("div");a.className="path-input-row";var r=n.parentNode;if(!r)return n;r.insertBefore(a,n),a.appendChild(n);var t=document.createElement("button");t.type="button",t.className="path-browse-btn",t.innerHTML=c;var s=i||"浏览路径";return t.setAttribute("aria-label",s),typeof bindUiHoverTip=="function"?(t.setAttribute("data-ui-tip",s),t.removeAttribute("title"),bindUiHoverTip(t)):t.title=s,t.addEventListener("click",function(l){l.stopPropagation();var m=n.getAttribute("data-path-kind")||e;m!=="file"&&m!=="directory"&&(m="directory"),o(t,m,n.value||"",function(v){if(v){var h=Array.isArray(v)?v[0]||"":String(v);h&&(n.value=h,n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})))}})}),a.appendChild(t),n.dataset.pathBrowseWrapped="1",n}function b(n,e){var i=n.selectionStart,a=n.selectionEnd,r=n.value.slice(0,i),t=n.value.slice(a),s=String(e||"");r.length&&!/\s$/.test(r)&&(s=" "+s),t.length&&!/^\s/.test(t)&&(s=s+" "),n.value=r+s+t;var l=r.length+s.length;n.selectionStart=n.selectionEnd=l,n.dispatchEvent(new Event("input",{bubbles:!0})),n.focus()}function y(n,e){!n||!e||(f(),n.classList.add("path-browse-btn","path-browse-btn--ghost"),n.innerHTML=c,n.setAttribute("aria-label","选择文件"),n.setAttribute("data-ui-tip","选择文件"),n.dataset.silentPickerUnavailable="1",n.removeAttribute("title"),n.addEventListener("click",function(i){i.stopPropagation();var a=g&&typeof g.__WORK_DIR__=="string"?g.__WORK_DIR__:"";o(n,"file",a,function(r){var t=Array.isArray(r)?r:r?[r]:[];if(t.length){var s=t.map(function(l){return d(l)}).join(" ");b(e,s)}},!0)}))}function S(n){n=n||document;var e=n.querySelectorAll("[data-path-kind]"),i;for(i=0;i<e.length;i++){var a=e[i],r=a.getAttribute("data-path-kind");(r==="file"||r==="directory")&&u(a,r)}}g.MyAgentPathPicker={pickPath:p,wrapInputWithBrowse:u,attachChatPicker:y,scan:S},document.readyState==="loading"?document.addEventListener("DOMContentLoaded",function(){S(document)}):S(document)})(typeof window<"u"?window:globalThis);const I=`// ═══════════════════════════════════════════════════════════
 // MyAgent · 智能会话 — 完整逻辑
 // ═══════════════════════════════════════════════════════════
 
@@ -1038,6 +1038,7 @@ function selectSubagentRunningCount(sessionId) {
 `,_=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
+    progressBySession: new Map(),
 
     setTokens(sessionId, estimated, threshold) {
         const sid = String(sessionId || '');
@@ -1089,11 +1090,37 @@ function selectSubagentRunningCount(sessionId) {
         this.todoBySession.delete(String(sessionId || ''));
     },
 
+    appendProgress(sessionId, kind, delta) {
+        const sid = String(sessionId || '');
+        const k = String(kind || '');
+        if (!sid || !k) return null;
+        let st = this.progressBySession.get(sid);
+        if (!st) {
+            st = {
+                sessionId: sid,
+                contextSummary: '',
+                keyContext: '',
+                updatedAt: 0,
+            };
+            this.progressBySession.set(sid, st);
+        }
+        const text = delta == null ? '' : String(delta);
+        if (k === 'context-summary') st.contextSummary += text;
+        else if (k === 'key-context') st.keyContext += text;
+        st.updatedAt = Date.now();
+        return st;
+    },
+
+    clearProgress(sessionId) {
+        this.progressBySession.delete(String(sessionId || ''));
+    },
+
     clearSession(sessionId) {
         const sid = String(sessionId || '');
         if (!sid) return;
         this.clearTokens(sid);
         this.clearTodo(sid);
+        this.clearProgress(sid);
     },
 };
 
@@ -1119,6 +1146,14 @@ function selectTodoPlan(sessionId) {
 
 function clearTodoPlanState(sessionId) {
     contextStore.clearTodo(sessionId);
+}
+
+function appendContextProgressForSession(sessionId, kind, delta) {
+    return contextStore.appendProgress(sessionId, kind, delta);
+}
+
+function selectContextProgress(sessionId) {
+    return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
 `,P=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
@@ -1160,6 +1195,14 @@ function applySessionEvent(event, opts) {
     }
     if (type === 'context_tokens') {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);
+        return { handled: false, contextStateChanged: true };
+    }
+    if (type === 'context_summary_delta') {
+        appendContextProgressForSession(sessionId, 'context-summary', event.delta);
+        return { handled: false, contextStateChanged: true };
+    }
+    if (type === 'key_context_delta') {
+        appendContextProgressForSession(sessionId, 'key-context', event.delta);
         return { handled: false, contextStateChanged: true };
     }
     if (type === 'todo_plan') {
@@ -2687,22 +2730,22 @@ async function clearTodoPlan() {
     if (listEl) listEl.textContent = '';
 }
 
-function applyTodoPlanFromPayload(data) {
+function renderTodoPlanSnapshot(snapshot) {
     const root = document.getElementById('chat-todo-plan');
     const listEl = document.getElementById('chat-todo-plan-list');
     const statsEl = document.getElementById('chat-todo-plan-stats');
     if (!root || !listEl || !statsEl) return;
-    const snapshot = applyTodoPlanToStore(currentSessionId, data) || { items: [], done: 0, total: 0, has_plan: false };
-    const items = snapshot.items;
-    const has = !!(snapshot.has_plan && items.length > 0);
+    const data = snapshot || { items: [], done: 0, total: 0, has_plan: false };
+    const items = Array.isArray(data.items) ? data.items : [];
+    const has = !!(data.has_plan && items.length > 0);
     if (!has) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
         return;
     }
-    const done = snapshot.done;
-    const total = snapshot.total;
+    const done = data.done;
+    const total = data.total;
     statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
     listEl.textContent = '';
     items.forEach(function (it) {
@@ -2719,6 +2762,14 @@ function applyTodoPlanFromPayload(data) {
         listEl.appendChild(li);
     });
     root.classList.add('is-open');
+}
+
+function applyTodoPlanFromPayload(data) {
+    renderTodoPlanSnapshot(applyTodoPlanToStore(currentSessionId, data));
+}
+
+function renderTodoPlanForCurrentSession() {
+    renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
 async function refreshTodoPlanPanel() {
@@ -8557,6 +8608,11 @@ async function createNewSessionInner() {
                     syncSessionListIndicatorClasses();
                     continue;
                 }
+                if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
+                    if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
+                    else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();
+                    if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;
+                }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
@@ -8608,9 +8664,9 @@ async function createNewSessionInner() {
                     if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
-                    else if (parsed.type === 'context_tokens') recordContextTokens(runSessionId, parsed.estimated, parsed.threshold);
+                    else if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed);
-                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) applyTodoPlanFromPayload(parsed);
+                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;

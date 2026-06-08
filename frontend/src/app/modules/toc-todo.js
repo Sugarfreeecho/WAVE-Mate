@@ -327,22 +327,22 @@ async function clearTodoPlan() {
     if (listEl) listEl.textContent = '';
 }
 
-function applyTodoPlanFromPayload(data) {
+function renderTodoPlanSnapshot(snapshot) {
     const root = document.getElementById('chat-todo-plan');
     const listEl = document.getElementById('chat-todo-plan-list');
     const statsEl = document.getElementById('chat-todo-plan-stats');
     if (!root || !listEl || !statsEl) return;
-    const snapshot = applyTodoPlanToStore(currentSessionId, data) || { items: [], done: 0, total: 0, has_plan: false };
-    const items = snapshot.items;
-    const has = !!(snapshot.has_plan && items.length > 0);
+    const data = snapshot || { items: [], done: 0, total: 0, has_plan: false };
+    const items = Array.isArray(data.items) ? data.items : [];
+    const has = !!(data.has_plan && items.length > 0);
     if (!has) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
         return;
     }
-    const done = snapshot.done;
-    const total = snapshot.total;
+    const done = data.done;
+    const total = data.total;
     statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
     listEl.textContent = '';
     items.forEach(function (it) {
@@ -359,6 +359,14 @@ function applyTodoPlanFromPayload(data) {
         listEl.appendChild(li);
     });
     root.classList.add('is-open');
+}
+
+function applyTodoPlanFromPayload(data) {
+    renderTodoPlanSnapshot(applyTodoPlanToStore(currentSessionId, data));
+}
+
+function renderTodoPlanForCurrentSession() {
+    renderTodoPlanSnapshot(selectTodoPlan(currentSessionId));
 }
 
 async function refreshTodoPlanPanel() {

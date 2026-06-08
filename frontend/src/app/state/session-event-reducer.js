@@ -40,6 +40,14 @@ function applySessionEvent(event, opts) {
         setContextTokensForSession(sessionId, event.estimated, event.threshold);
         return { handled: false, contextStateChanged: true };
     }
+    if (type === 'context_summary_delta') {
+        appendContextProgressForSession(sessionId, 'context-summary', event.delta);
+        return { handled: false, contextStateChanged: true };
+    }
+    if (type === 'key_context_delta') {
+        appendContextProgressForSession(sessionId, 'key-context', event.delta);
+        return { handled: false, contextStateChanged: true };
+    }
     if (type === 'todo_plan') {
         applyTodoPlanToStore(sessionId, event);
         return { handled: false, contextStateChanged: true };

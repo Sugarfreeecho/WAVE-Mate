@@ -34,6 +34,11 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     syncSessionListIndicatorClasses();
                     continue;
                 }
+                if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
+                    if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
+                    else if (parsed.type === 'todo_plan') renderTodoPlanForCurrentSession();
+                    if (parsed.type === 'context_tokens' || parsed.type === 'todo_plan') continue;
+                }
                 if (parsed.ephemeral) {
                     /* 任何携带 agent_id 的 ephemeral 都属于子 agent；无论投递成功与否都不能 fall-through
                        到父 ctx 的 appendLlmStreamDelta，否则会污染主对话区。 */
@@ -85,9 +90,9 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                     if (parsed.type === 'llm_reasoning_delta' || parsed.type === 'llm_response_delta') appendLlmStreamDelta(runCtx, parsed, runSessionId);
                     else if (parsed.type === 'context_summary_delta') appendProgressStreamDelta(runCtx, parsed.delta, 'context-summary', runSessionId);
                     else if (parsed.type === 'key_context_delta') appendKeyContextStreamDelta(runCtx, parsed.delta, runSessionId);
-                    else if (parsed.type === 'context_tokens') recordContextTokens(runSessionId, parsed.estimated, parsed.threshold);
+                    else if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
                     else if (parsed.type === 'cache_stats' && runSessionId === currentSessionId) applyCacheStatsFromEvent(runCtx, parsed);
-                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) applyTodoPlanFromPayload(parsed);
+                    else if (parsed.type === 'todo_plan' && runSessionId === currentSessionId) renderTodoPlanForCurrentSession();
                     else if (parsed.type === 'status') {
                         var statusContent = String(parsed.content || '');
                         var isTemporaryStatus = statusContent.indexOf('正在思考中...') >= 0;

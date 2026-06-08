@@ -1357,6 +1357,72 @@ class SessionRepository:
     def ui_events_path(self, session_id: str) -> Path:
         return self.session_path(session_id) / "ui_events.json"
 
+    def pending_subagent_results_path(self, session_id: str) -> Path:
+        return self.session_path(session_id) / SUBAGENT_PENDING_RESULTS_FILE
+
+    def subagent_tasks_path(self, session_id: str) -> Path:
+        return self.session_path(session_id) / "subagent_tasks.json"
+
+    def load_json_list(self, path: Path) -> List[dict]:
+        if not path.is_file():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return []
+        if not isinstance(data, list):
+            return []
+        return [x for x in data if isinstance(x, dict)]
+
+    def save_json_list(self, path: Path, rows: List[dict]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(rows, f, indent=2, ensure_ascii=False)
+
+    def load_index(self, index_file: Path) -> List[dict]:
+        if not index_file.exists():
+            return []
+        with open(index_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        rows = data.get("sessions", []) if isinstance(data, dict) else []
+        return rows if isinstance(rows, list) else []
+
+    def save_index(self, index_file: Path, rows: List[dict]) -> None:
+        index_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(index_file, "w", encoding="utf-8") as f:
+            json.dump({"sessions": rows}, f, indent=2, ensure_ascii=False)
+
+    def load_metadata(self, session_id: str) -> dict:
+        path = self.metadata_path(session_id)
+        if not path.exists():
+            return {}
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            return {}
+        v = _parse_metadata_json_raw(raw)
+        return v if isinstance(v, dict) else {}
+
+    def save_metadata_atomic(self, session_id: str, metadata: dict) -> None:
+        path = self.metadata_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".metadata_",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(metadata if isinstance(metadata, dict) else {}, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
 
 class SessionEventLog:
     """Read/write UI event log JSON through one boundary."""
@@ -1501,9 +1567,7 @@ class SessionManager:
         with self._lock:
             if self.index_file.exists():
                 try:
-                    with open(self.index_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    rows = data.get("sessions", [])
+                    rows = self.repository.load_index(self.index_file)
                     self.index = [
                         s for s in rows
                         if isinstance(s, dict) and self._is_valid_session_id(str(s.get("id") or ""))
@@ -1516,8 +1580,7 @@ class SessionManager:
 
     def _save_index(self):
         with self._lock:
-            with open(self.index_file, "w", encoding="utf-8") as f:
-                json.dump({"sessions": self.index}, f, indent=2, ensure_ascii=False)
+            self.repository.save_index(self.index_file, self.index)
 
     def _subagent_index_file(self) -> Path:
         return self.sessions_dir / SUBAGENT_INDEX_FILE
@@ -1680,24 +1743,14 @@ class SessionManager:
         return path
 
     def _get_pending_subagent_results_path(self, session_id: str) -> Path:
-        return self._get_session_path(session_id) / SUBAGENT_PENDING_RESULTS_FILE
+        return self.repository.pending_subagent_results_path(session_id)
 
     def _get_subagent_tasks_path(self, session_id: str) -> Path:
-        return self._get_session_path(session_id) / "subagent_tasks.json"
+        return self.repository.subagent_tasks_path(session_id)
 
     def list_subagent_tasks(self, parent_session_id: str) -> List[dict]:
         """读取父会话下的 subagent task 状态索引。"""
-        path = self._get_subagent_tasks_path(parent_session_id)
-        if not path.is_file():
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return []
-        if not isinstance(data, list):
-            return []
-        return [x for x in data if isinstance(x, dict)]
+        return self.repository.load_json_list(self._get_subagent_tasks_path(parent_session_id))
 
     def upsert_subagent_task(self, parent_session_id: str, task_id: str, patch: Dict[str, Any]) -> None:
         """维护父会话下 subagent task 状态索引，供 UI/恢复/调试使用。"""
@@ -1705,16 +1758,7 @@ class SessionManager:
         if not tid:
             return
         path = self._get_subagent_tasks_path(parent_session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        rows: List[dict] = []
-        if path.is_file():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, list):
-                    rows = [x for x in data if isinstance(x, dict)]
-            except Exception:
-                rows = []
+        rows: List[dict] = self.repository.load_json_list(path)
         now = datetime.now(timezone.utc).isoformat()
         found = False
         for row in rows:
@@ -1728,8 +1772,7 @@ class SessionManager:
             row = {"task_id": tid, "created_at": now, "updated_at": now}
             row.update({k: v for k, v in (patch or {}).items() if v is not None})
             rows.append(row)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(rows, f, indent=2, ensure_ascii=False)
+        self.repository.save_json_list(path, rows)
 
     def write_subagent_output(self, child_session_id: str, text: str) -> str:
         """将 subagent 最终可读输出写入子会话 output.md，返回路径。"""
@@ -1798,16 +1841,7 @@ class SessionManager:
 
     def append_pending_subagent_result(self, parent_session_id: str, entry: Dict[str, Any]) -> None:
         path = self._get_pending_subagent_results_path(parent_session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        rows: List[dict] = []
-        if path.is_file():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, list):
-                    rows = [x for x in data if isinstance(x, dict)]
-            except Exception:
-                rows = []
+        rows: List[dict] = self.repository.load_json_list(path)
         row = dict(entry)
         if row.get("after_final_index") is None:
             events = self._load_ui_events(parent_session_id)
@@ -1815,21 +1849,11 @@ class SessionManager:
             if anchor >= 0:
                 row["after_final_index"] = anchor
         rows.append(row)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(rows, f, indent=2, ensure_ascii=False)
+        self.repository.save_json_list(path, rows)
 
     def _load_pending_subagent_results(self, session_id: str) -> List[dict]:
         path = self._get_pending_subagent_results_path(session_id)
-        if not path.is_file():
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return []
-        if not isinstance(data, list):
-            return []
-        rows = [x for x in data if isinstance(x, dict)]
+        rows = self.repository.load_json_list(path)
         try:
             meta = self._load_metadata(session_id)
             created_at = str((meta or {}).get("created_at") or "")
@@ -1932,7 +1956,6 @@ class SessionManager:
         rows = self._load_pending_subagent_results(session_id)
         events = self._load_ui_events(session_id)
         path = self._get_pending_subagent_results_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
         last_idx = self._latest_final_index_without_later_user(events)
         if not rows or not events or last_idx < 0:
             return []
@@ -1952,8 +1975,7 @@ class SessionManager:
                 lines.append(line)
             else:
                 keep.append(item)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(keep, f, indent=2, ensure_ascii=False)
+        self.repository.save_json_list(path, keep)
         return lines
 
     def clear_pending_subagent_results_by_agent_ids(self, session_id: str, agent_ids: List[str]) -> int:
@@ -1974,9 +1996,7 @@ class SessionManager:
             keep.append(item)
         if removed:
             path = self._get_pending_subagent_results_path(session_id)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(keep, f, indent=2, ensure_ascii=False)
+            self.repository.save_json_list(path, keep)
         return removed
 
     def dismiss_pending_subagent_notifications(self, session_id: str) -> int:
@@ -1996,9 +2016,7 @@ class SessionManager:
         keep = [x for x in rows if _pending_key(x) not in actionable_keys]
         removed = len(rows) - len(keep)
         path = self._get_pending_subagent_results_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(keep, f, indent=2, ensure_ascii=False)
+        self.repository.save_json_list(path, keep)
         return removed
 
     def _extract_subagent_dialogue_turns(
@@ -3263,34 +3281,10 @@ class SessionManager:
             logger.warning("append_key_context_history 失败: %s", e)
 
     def _save_metadata_unlocked(self, session_id: str, metadata: dict) -> None:
-        path = self._get_metadata_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".metadata_",
-            suffix=".tmp",
-            dir=str(path.parent),
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(metadata if isinstance(metadata, dict) else {}, f, indent=2, ensure_ascii=False)
-            os.replace(tmp_path, path)
-        except BaseException:
-            try:
-                Path(tmp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        self.repository.save_metadata_atomic(session_id, metadata)
 
     def _load_metadata_unlocked(self, session_id: str) -> dict:
-        path = self._get_metadata_path(session_id)
-        if not path.exists():
-            return {}
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        v = _parse_metadata_json_raw(raw)
-        return v if isinstance(v, dict) else {}
+        return self.repository.load_metadata(session_id)
 
     def _save_metadata(self, session_id: str, metadata: dict) -> None:
         with self._session_metadata_lock(session_id):
