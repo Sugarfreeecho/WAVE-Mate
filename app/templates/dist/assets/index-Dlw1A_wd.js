@@ -954,7 +954,52 @@ function applySubagentLifecycleToStore(sessionId, event) {
 function clearSubagentStateForSession(sessionId) {
     subagentStore.clearSession(sessionId);
 }
-`,_=`function formatTokenCompact(n) {
+`,_=`function markUiEventStoreApplied(event) {
+    if (!event || typeof event !== 'object') return;
+    try {
+        Object.defineProperty(event, '__storeApplied', {
+            value: true,
+            configurable: true,
+            enumerable: false,
+        });
+    } catch (e) {
+        event.__storeApplied = true;
+    }
+}
+
+function applySessionEvent(event, opts) {
+    if (!event || typeof event !== 'object') return { handled: false };
+    opts = opts || {};
+    const sessionId = String(
+        opts.sessionId
+        || event.session_id
+        || event.sessionId
+        || currentSessionId
+        || ''
+    );
+    const eventIndex = opts.eventIndex;
+    const source = opts.source || 'event';
+    const type = String(event.type || '');
+    if (sessionId) {
+        applyMessageEvent(sessionId, event, eventIndex, source);
+        markUiEventStoreApplied(event);
+    }
+    if (type === 'run_started' || type === 'run_attached') {
+        setSessionServerStreamActive(sessionId, true);
+        return { handled: true, runStateChanged: true };
+    }
+    if (type === 'run_finished' || type === 'run_interrupted' || type === 'run_failed') {
+        setSessionServerStreamActive(sessionId, false);
+        return { handled: true, runStateChanged: true };
+    }
+    if (type === 'subagent_start' || type === 'subagent_finish'
+        || type === 'subagent_started' || type === 'subagent_finished') {
+        applySubagentLifecycleToStore(sessionId, event);
+        return { handled: false, subagentStateChanged: true };
+    }
+    return { handled: false };
+}
+`,P=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -2131,7 +2176,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,P=`function ensureUiHoverTooltipEl() {
+`,A=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2517,7 +2562,7 @@ async function refreshTodoPlanPanel() {
     }
 }
 
-`,A=`function removeMessagesFromNode(startWrap) {
+`,B=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -4978,7 +5023,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,B=`var subagentCardSyncTimer = null;
+`,R=`var subagentCardSyncTimer = null;
 var subagentCardEventCount = Object.create(null);
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
@@ -7272,10 +7317,10 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-`,R=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,F=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
-    if (eventSessionId) {
+    if (eventSessionId && !event.__storeApplied) {
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
         if (event.type === 'subagent_start' || event.type === 'subagent_finish'
             || event.type === 'subagent_started' || event.type === 'subagent_finished') {
@@ -7362,7 +7407,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,F=`function setSendButtonState() {
+`,M=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8284,7 +8329,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,M=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,N=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8311,13 +8356,12 @@ async function createNewSessionInner() {
                 const parsed = JSON.parse(data);
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
-                if (parsed.type === 'run_started' || parsed.type === 'run_attached') {
-                    setSessionServerStreamActive(eventSessionId, true);
-                    syncSessionListIndicatorClasses();
-                    continue;
-                }
-                if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
-                    setSessionServerStreamActive(eventSessionId, false);
+                const reduced = applySessionEvent(parsed, {
+                    sessionId: eventSessionId,
+                    eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
+                    source: 'sse',
+                });
+                if (reduced.runStateChanged) {
                     syncSessionListIndicatorClasses();
                     continue;
                 }
@@ -8796,7 +8840,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,N=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,O=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9035,8 +9079,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,O=[x,I,C,w,T,E,L,k,_,P,A,B,R,F,M,N];Function(`"use strict";
-`+O.join(`
+`,H=[x,I,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O];Function(`"use strict";
+`+H.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();

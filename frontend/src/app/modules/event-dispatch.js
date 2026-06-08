@@ -1,7 +1,7 @@
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
-    if (eventSessionId) {
+    if (eventSessionId && !event.__storeApplied) {
         applyMessageEvent(eventSessionId, event, eventIndex, replayingMessages ? 'history' : 'stream');
         if (event.type === 'subagent_start' || event.type === 'subagent_finish'
             || event.type === 'subagent_started' || event.type === 'subagent_finished') {

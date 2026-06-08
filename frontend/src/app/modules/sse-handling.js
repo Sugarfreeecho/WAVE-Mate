@@ -25,13 +25,12 @@ async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEve
                 const parsed = JSON.parse(data);
                 const eventSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                 if (!sessionStore.shouldAcceptSseEvent(eventSessionId, parsed.seq)) continue;
-                if (parsed.type === 'run_started' || parsed.type === 'run_attached') {
-                    setSessionServerStreamActive(eventSessionId, true);
-                    syncSessionListIndicatorClasses();
-                    continue;
-                }
-                if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
-                    setSessionServerStreamActive(eventSessionId, false);
+                const reduced = applySessionEvent(parsed, {
+                    sessionId: eventSessionId,
+                    eventIndex: parsed.ephemeral && Number.isFinite(Number(parsed.seq)) ? Number(parsed.seq) : streamEventIdx,
+                    source: 'sse',
+                });
+                if (reduced.runStateChanged) {
                     syncSessionListIndicatorClasses();
                     continue;
                 }
