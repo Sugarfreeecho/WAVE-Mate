@@ -86,10 +86,16 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             s["stream_active"] = False
             continue
         sid = str(sid)
-        active = _is_session_stream_active(sid)
+        stream_connections = int(_active_chat_by_session.get(sid, 0) or 0)
+        run_active = bool(is_run_active(sid))
+        active = bool(stream_connections > 0 or run_active)
         s["stream_active"] = active
         if active:
-            active_runs.append({"session_id": sid})
+            active_runs.append({
+                "session_id": sid,
+                "stream_connections": stream_connections,
+                "run_active": run_active,
+            })
         try:
             pending = session_manager.count_actionable_pending_subagent_results(sid)
         except Exception:

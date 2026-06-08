@@ -13,6 +13,7 @@ function applySessionSnapshot(snapshot) {
         sessionStore.setCurrentSession(snapshot.current_session_id || snapshot.currentSessionId);
     }
     if (Array.isArray(snapshot.active_runs)) {
+        sessionStore.applyActiveRuns(snapshot.active_runs);
         const active = Object.create(null);
         snapshot.active_runs.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);

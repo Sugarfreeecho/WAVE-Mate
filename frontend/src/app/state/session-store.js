@@ -4,6 +4,7 @@ const sessionStore = {
     sessionOrder: [],
     currentSessionId: null,
     runsBySession: new Map(),
+    activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
@@ -56,6 +57,7 @@ const sessionStore = {
         this.sessionsById.delete(sid);
         delete this.streamActiveById[sid];
         this.runsBySession.delete(sid);
+        this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
     },
@@ -170,6 +172,21 @@ const sessionStore = {
 
     hasRun(sessionId) {
         return this.runsBySession.has(String(sessionId || ''));
+    },
+
+    applyActiveRuns(activeRuns) {
+        const next = new Map();
+        const list = Array.isArray(activeRuns) ? activeRuns : [];
+        list.forEach(function (run) {
+            const sid = typeof run === 'string' ? run : (run && run.session_id);
+            if (!sid) return;
+            next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
+        });
+        this.activeRunInfoBySession = next;
+    },
+
+    getActiveRunInfo(sessionId) {
+        return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
     },
 
     shouldAcceptSseEvent(sessionId, seq) {
