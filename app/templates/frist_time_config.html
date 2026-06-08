@@ -6,7 +6,7 @@
 <title>WaveMate · 首次配置</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>try { if (localStorage.getItem('myagent-theme') !== 'dark') document.documentElement.classList.add('theme-light'); } catch (e) { document.documentElement.classList.add('theme-light'); }</script>
 <style>
   /* ═══ 与主界面 index.html 一致的设计系统 ═══ */
@@ -151,6 +151,7 @@
     font-size: 1.35rem;
     font-weight: 700;
     letter-spacing: -0.02em;
+    font-family: 'Space Grotesk', var(--sans);
     margin-bottom: 0.25rem;
     background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
     -webkit-background-clip: text;
@@ -159,6 +160,12 @@
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
   }
   :root.theme-light .logo h1 {
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
@@ -174,12 +181,12 @@
   .brand-sub {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 0.06rem;
     margin-top: 0.1rem;
     color: #7f8699;
     letter-spacing: 0.01em;
-    line-height: 1.4;
-    font-size: 0.62rem;
+    line-height: 1.12;
+    font-size: 0.56rem;
     font-family: var(--sans);
     user-select: none;
     -webkit-user-select: none;
@@ -194,8 +201,7 @@
   }
   .brand-sub-line--en {
     font-size: inherit;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    letter-spacing: 0.03em;
   }
   .brand-sub-line--zh {
     font-size: inherit;
@@ -416,7 +422,7 @@
   <div class="card">
     <div class="logo">
       <div class="logo-icon" aria-hidden="true"><svg viewBox="0 0 40 32" fill="none" xmlns="http://www.w3.org/2000/svg"><text x="20" y="21" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="15" font-style="italic" fill="white" stroke="none" transform="rotate(-6 20 16)">Sugar</text></svg></div>
-      <h1>WaveMate</h1>
+      <h1>WAVE Agent</h1>
       <p class="brand-sub" title="Wireless Analyzer &amp; Virtual Expert - 无线分析虚拟专家Agent">
         <span class="brand-sub-line brand-sub-line--en">Wireless Analyzer &amp; Virtual Expert</span>
         <span class="brand-sub-line brand-sub-line--zh">无线分析虚拟专家Agent</span>

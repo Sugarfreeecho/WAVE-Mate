@@ -167,12 +167,19 @@ body {
 }
 .sidebar-brand-text {
     font-weight: 700; font-size: 1.15rem; letter-spacing: -0.03em;
+    font-family: 'Space Grotesk', var(--sans);
     background: linear-gradient(135deg, #f0eff5 0%, #c8c6d6 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text;
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: clip;
 }
 :root.theme-light .sidebar-brand-text {
     background: linear-gradient(135deg, #1f1f2e 0%, #4f46e5 55%, #6366f1 100%);
@@ -182,13 +189,13 @@ body {
 .sidebar-brand-sub {
     display: flex;
     flex-direction: column;
-    gap: 0;
+    gap: 0.06rem;
     margin-top: 0.1rem;
     color: #7f8699;
     text-transform: none;
     letter-spacing: 0.01em;
-    line-height: 1.4;
-    font-size: 0.62rem;
+    line-height: 1.12;
+    font-size: 0.56rem;
     font-family: var(--sans);
     user-select: none;
     -webkit-user-select: none;
@@ -203,8 +210,7 @@ body {
 }
 .sidebar-brand-sub-line--en {
     font-size: inherit;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
 .sidebar-brand-sub-line--zh {
     font-size: inherit;

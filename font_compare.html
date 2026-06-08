@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WAVE Agent Font Compare</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: rgba(18, 24, 42, 0.82);
+      --panel-2: rgba(26, 33, 54, 0.9);
+      --border: rgba(148, 163, 184, 0.18);
+      --text: #e5ecff;
+      --muted: #94a3b8;
+      --accent: #8b5cf6;
+      --accent-2: #38bdf8;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: "Inter Tight", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(139, 92, 246, 0.18), transparent 36%),
+        radial-gradient(circle at 80% 20%, rgba(56, 189, 248, 0.12), transparent 28%),
+        var(--bg);
+      color: var(--text);
+      padding: 28px;
+    }
+
+    .wrap {
+      max-width: 1320px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.3rem;
+      letter-spacing: 0.01em;
+      font-weight: 700;
+    }
+
+    .hint {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .chip {
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      cursor: pointer;
+      transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .chip:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.07);
+      border-color: rgba(255, 255, 255, 0.26);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.24);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .font-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    .font-tag {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .sample {
+      padding: 18px 16px 20px;
+    }
+
+    .title {
+      margin: 0 0 8px;
+      line-height: 1;
+      font-size: 2.6rem;
+      letter-spacing: 0.01em;
+      color: #f6f7ff;
+      user-select: none;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: #9aa6c3;
+      font-size: 0.86rem;
+      line-height: 1.35;
+      user-select: none;
+    }
+
+    .meta {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+
+    .space-grotesk { font-family: "Space Grotesk", system-ui, sans-serif; }
+    .inter-tight { font-family: "Inter Tight", system-ui, sans-serif; }
+    .manrope { font-family: "Manrope", system-ui, sans-serif; }
+    .ibm-plex { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+    .sora { font-family: "Sora", system-ui, sans-serif; }
+
+    .preview {
+      margin-top: 18px;
+      padding: 18px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+
+    .preview .title {
+      font-size: clamp(2.4rem, 4vw, 4.3rem);
+    }
+
+    .preview .subtitle {
+      font-size: 0.9rem;
+      max-width: 56ch;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <h1>WAVE Agent 字体对比</h1>
+        <p class="hint">点击上方按钮切换下方大预览。每张卡片都用同一套文案，方便你直接看标题气质和中英副标题的平衡。</p>
+      </div>
+      <div class="controls" role="toolbar" aria-label="字体对比切换">
+        <button class="chip" data-target="space-grotesk">Space Grotesk</button>
+        <button class="chip" data-target="inter-tight">Inter Tight</button>
+        <button class="chip" data-target="manrope">Manrope</button>
+        <button class="chip" data-target="ibm-plex">IBM Plex Sans</button>
+        <button class="chip" data-target="sora">Sora</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <div class="card-head">
+          <div class="font-name">Space Grotesk</div>
+          <div class="font-tag">推荐先看这个</div>
+        </div>
+        <div class="sample space-grotesk">
+          <h2 class="title">WAVE Agent</h2>
+          <p class="subtitle">Wireless Analyzer &amp; Virtual Expert<br>无线分析虚拟专家Agent</p>
+          <div class="meta">偏产品感、偏技术感，字形更有性格，通常最适合做品牌主标题。</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="font-name">Inter Tight</div>
+          <div class="font-tag">紧凑、干净</div>
+        </div>
+        <div class="sample inter-tight">
+          <h2 class="title">WAVE Agent</h2>
+          <p class="subtitle">Wireless Analyzer &amp; Virtual Expert<br>无线分析虚拟专家Agent</p>
+          <div class="meta">更收敛，适合想要高信息密度、界面更冷静的感觉。</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="font-name">Manrope</div>
+          <div class="font-tag">柔和一点</div>
+        </div>
+        <div class="sample manrope">
+          <h2 class="title">WAVE Agent</h2>
+          <p class="subtitle">Wireless Analyzer &amp; Virtual Expert<br>无线分析虚拟专家Agent</p>
+          <div class="meta">比 Inter Tight 更圆润，读起来比较舒服，适合稳重一点的产品气质。</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div class="font-name">IBM Plex Sans</div>
+          <div class="font-tag">工程感更强</div>
+        </div>
+        <div class="sample ibm-plex">
+          <h2 class="title">WAVE Agent</h2>
+          <p class="subtitle">Wireless Analyzer &amp; Virtual Expert<br>无线分析虚拟专家Agent</p>
+          <div class="meta">更像工具型界面，稳、清楚、偏技术文档气质。</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="preview" id="preview">
+      <div class="sample space-grotesk" id="previewSample">
+        <h2 class="title">WAVE Agent</h2>
+        <p class="subtitle">Wireless Analyzer &amp; Virtual Expert<br>无线分析虚拟专家Agent</p>
+        <div class="meta">这是可切换的大预览区。你点上面的按钮，我就把这个区域切到对应字体。</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const previewSample = document.getElementById('previewSample');
+    document.querySelectorAll('[data-target]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        previewSample.className = 'sample ' + btn.dataset.target;
+      });
+    });
+  </script>
+</body>
+</html>
