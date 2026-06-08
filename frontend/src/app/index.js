@@ -6,6 +6,7 @@ import sessionActionsSource from './state/session-actions.js?raw';
 import sessionRenderersSource from './state/session-renderers.js?raw';
 import messageStoreSource from './state/message-store.js?raw';
 import subagentStoreSource from './state/subagent-store.js?raw';
+import contextStoreSource from './state/context-store.js?raw';
 import sessionEventReducerSource from './state/session-event-reducer.js?raw';
 import sessionScrollHistorySource from './modules/session-scroll-history.js?raw';
 import tocTodoSource from './modules/toc-todo.js?raw';
@@ -25,6 +26,7 @@ const uiSources = [
     sessionRenderersSource,
     messageStoreSource,
     subagentStoreSource,
+    contextStoreSource,
     sessionEventReducerSource,
     sessionScrollHistorySource,
     tocTodoSource,

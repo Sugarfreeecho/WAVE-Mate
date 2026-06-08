@@ -68,17 +68,13 @@ function scheduleContextTokensAfterPaint(sid) {
 
 function recordContextTokens(sessionId, estimated, threshold) {
     if (!sessionId) return;
-    if (estimated != null && Number(estimated) >= 0) {
-        contextTokensBySession[sessionId] = { estimated: Number(estimated), threshold: threshold };
-    } else {
-        delete contextTokensBySession[sessionId];
-    }
+    setContextTokensForSession(sessionId, estimated, threshold);
     if (sessionId === currentSessionId) setContextTokenLabel(estimated, threshold);
 }
 
 function applyContextTokenLabelForCurrentSession() {
     if (!currentSessionId) { setContextTokenLabel(null, null); return; }
-    const x = contextTokensBySession[currentSessionId];
+    const x = selectContextTokens(currentSessionId);
     if (x) setContextTokenLabel(x.estimated, x.threshold);
     else setContextTokenLabel(null, null);
 }

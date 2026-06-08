@@ -1,7 +1,9 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 
-const appRoot = resolve(__dirname, '..', 'app', 'templates', 'dist');
+const appRoot = process.env.WAVEMATE_DIST_DIR
+  ? resolve(process.env.WAVEMATE_DIST_DIR)
+  : resolve(__dirname, '..', 'app', 'templates', 'dist');
 
 export default defineConfig({
   root: __dirname,

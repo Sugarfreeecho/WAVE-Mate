@@ -27,7 +27,7 @@ function pauseCurrentRun() {
         return;
     }
     const ctx = run.ctx;
-    /* 先同步 abort 本地 fetch 与从 runningBySession 摘除，UI 立刻反映为「已停止」状态。
+    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
     try { run.controller.abort(); } catch (e) { /* ignore */ }
     clearSessionRunState(sid);
@@ -83,7 +83,7 @@ function showLoading() {
 
 function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
 
-/** 根据 runningBySession / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
+/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
@@ -294,7 +294,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             delete lastUserMessageBySession[deletedSessionId];
-            delete contextTokensBySession[deletedSessionId];
+            clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
                 try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }

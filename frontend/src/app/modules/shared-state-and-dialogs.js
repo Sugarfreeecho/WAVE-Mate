@@ -1,8 +1,5 @@
 let currentSessionId = null;
-const contextTokensBySession = Object.create(null);
-/* Legacy compatibility holder. Active run state lives in sessionStore.runsBySession. */
-const runningBySession = Object.create(null);
-/** 阻塞连击发送：在写入 runningBySession 之前的 await 空隙内仍会因 isSessionRunning 为假而误判可发 */
+/** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
 let sendPipelineLock = false;
 let sendPipelineLockSessionId = null;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */

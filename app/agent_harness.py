@@ -1339,6 +1339,50 @@ TODO_SECTION_HEADER = "## Todo 计划"
 
 
 # ==================== 会话管理器（持久化 work_messages, llm_history, key_context；对话主链快照来自 ui_events）====================
+class SessionRepository:
+    """Thin path boundary for session files; SessionManager owns behavior for now."""
+
+    def __init__(self, sessions_dir: Path, path_resolver=None):
+        self.sessions_dir = sessions_dir
+        self._path_resolver = path_resolver
+
+    def session_path(self, session_id: str) -> Path:
+        if self._path_resolver is not None:
+            return self._path_resolver(session_id)
+        return self.sessions_dir / str(session_id)
+
+    def metadata_path(self, session_id: str) -> Path:
+        return self.session_path(session_id) / "metadata.json"
+
+    def ui_events_path(self, session_id: str) -> Path:
+        return self.session_path(session_id) / "ui_events.json"
+
+
+class SessionEventLog:
+    """Read/write UI event log JSON through one boundary."""
+
+    def __init__(self, repository: SessionRepository):
+        self.repository = repository
+
+    def load(self, session_id: str) -> List[dict]:
+        path = self.repository.ui_events_path(session_id)
+        if not path.exists():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning("Failed to load ui_events for session %s: %s", session_id, e)
+            return []
+
+    def save(self, session_id: str, events: List[dict]) -> None:
+        path = self.repository.ui_events_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(events, f, indent=2, ensure_ascii=False)
+
+
 class SessionManager:
     """
     管理会话的持久化：
@@ -1353,6 +1397,8 @@ class SessionManager:
     def __init__(self, sessions_dir: Path, index_file: Path):
         self.sessions_dir = sessions_dir
         self.index_file = index_file
+        self.repository = SessionRepository(sessions_dir, self._resolve_session_path)
+        self.event_log = SessionEventLog(self.repository)
         self._lock = threading.Lock()
         self._metadata_session_locks: Dict[str, threading.Lock] = {}
         self._metadata_session_locks_guard = threading.Lock()
@@ -2391,22 +2437,13 @@ class SessionManager:
             return kc
 
     def _get_metadata_path(self, session_id: str) -> Path:
-        return self._get_session_path(session_id) / "metadata.json"
+        return self.repository.metadata_path(session_id)
 
     def _get_ui_events_path(self, session_id: str) -> Path:
-        return self._get_session_path(session_id) / "ui_events.json"
+        return self.repository.ui_events_path(session_id)
 
     def _load_ui_events(self, session_id: str) -> List[dict]:
-        path = self._get_ui_events_path(session_id)
-        if path.exists():
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return data if isinstance(data, list) else []
-            except Exception as e:
-                logger.warning("Failed to load ui_events for session %s: %s", session_id, e)
-                return []
-        return []
+        return self.event_log.load(session_id)
 
     def _save_ui_events(self, session_id: str, events: List[dict]) -> None:
         try:
@@ -2416,10 +2453,7 @@ class SessionManager:
                 return
         except Exception:
             pass
-        path = self._get_ui_events_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(events, f, indent=2, ensure_ascii=False)
+        self.event_log.save(session_id, events)
         self._sync_ui_event_count_in_metadata(session_id, len(events))
 
     def _sync_ui_event_count_in_metadata(self, session_id: str, count: int) -> None:

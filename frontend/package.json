@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "verify:dist": "python ../scripts/check_frontend_dist_sync.py",
     "preview": "vite preview"
   },
   "devDependencies": {

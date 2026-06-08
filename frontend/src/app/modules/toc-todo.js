@@ -173,6 +173,7 @@ function clearTodoForSessionLoad() {
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
     todoRefreshEpoch += 1;
+    if (currentSessionId) clearTodoPlanState(currentSessionId);
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
     if (root) root.classList.remove('is-open');
@@ -318,6 +319,7 @@ async function clearTodoPlan() {
     try {
         await fetch('/sessions/' + encodeURIComponent(sid) + '/todo_plan', { method: 'DELETE' });
     } catch (e) { /* ignore */ }
+    clearTodoPlanState(sid);
     hideTodoPlanPanel();
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
@@ -330,18 +332,17 @@ function applyTodoPlanFromPayload(data) {
     const listEl = document.getElementById('chat-todo-plan-list');
     const statsEl = document.getElementById('chat-todo-plan-stats');
     if (!root || !listEl || !statsEl) return;
-    const items = data && Array.isArray(data.items) ? data.items : [];
-    const has = !!(data && data.has_plan && items.length > 0);
+    const snapshot = applyTodoPlanToStore(currentSessionId, data) || { items: [], done: 0, total: 0, has_plan: false };
+    const items = snapshot.items;
+    const has = !!(snapshot.has_plan && items.length > 0);
     if (!has) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
         return;
     }
-    const done = typeof data.done === 'number'
-        ? data.done
-        : items.filter(function (x) { return x && x.status === 'completed'; }).length;
-    const total = typeof data.total === 'number' ? data.total : items.length;
+    const done = snapshot.done;
+    const total = snapshot.total;
     statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
     listEl.textContent = '';
     items.forEach(function (it) {
@@ -363,6 +364,7 @@ function applyTodoPlanFromPayload(data) {
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
     if (!sid) {
+        clearTodoPlanState(sid);
         hideTodoPlanPanel();
         const statsEl = document.getElementById('chat-todo-plan-stats');
         const listEl = document.getElementById('chat-todo-plan-list');
@@ -383,4 +385,3 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-

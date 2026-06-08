@@ -36,6 +36,14 @@ function applySessionEvent(event, opts) {
         setSessionServerStreamActive(sessionId, false);
         return { handled: true, runStateChanged: true };
     }
+    if (type === 'context_tokens') {
+        setContextTokensForSession(sessionId, event.estimated, event.threshold);
+        return { handled: false, contextStateChanged: true };
+    }
+    if (type === 'todo_plan') {
+        applyTodoPlanToStore(sessionId, event);
+        return { handled: false, contextStateChanged: true };
+    }
     if (type === 'subagent_start' || type === 'subagent_finish'
         || type === 'subagent_started' || type === 'subagent_finished') {
         applySubagentLifecycleToStore(sessionId, event);

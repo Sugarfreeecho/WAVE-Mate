@@ -155,10 +155,7 @@ function initUiSettingsControls() {
 initUiSettingsControls();
 
 `,x=`let currentSessionId = null;
-const contextTokensBySession = Object.create(null);
-/* Legacy compatibility holder. Active run state lives in sessionStore.runsBySession. */
-const runningBySession = Object.create(null);
-/** 阻塞连击发送：在写入 runningBySession 之前的 await 空隙内仍会因 isSessionRunning 为假而误判可发 */
+/** Blocks repeat sends while the async send pipeline is claiming a sessionStore run slot. */
 let sendPipelineLock = false;
 let sendPipelineLockSessionId = null;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
@@ -1038,7 +1035,92 @@ function selectSubagentList(sessionId) {
 function selectSubagentRunningCount(sessionId) {
     return subagentStore.runningCount(sessionId);
 }
-`,_=`function markUiEventStoreApplied(event) {
+`,_=`const contextStore = {
+    tokensBySession: new Map(),
+    todoBySession: new Map(),
+
+    setTokens(sessionId, estimated, threshold) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        if (estimated != null && Number(estimated) >= 0) {
+            this.tokensBySession.set(sid, {
+                estimated: Number(estimated),
+                threshold: threshold,
+                updatedAt: Date.now(),
+            });
+        } else {
+            this.tokensBySession.delete(sid);
+        }
+    },
+
+    getTokens(sessionId) {
+        return this.tokensBySession.get(String(sessionId || '')) || null;
+    },
+
+    clearTokens(sessionId) {
+        this.tokensBySession.delete(String(sessionId || ''));
+    },
+
+    setTodo(sessionId, payload) {
+        const sid = String(sessionId || '');
+        if (!sid) return null;
+        const data = payload && typeof payload === 'object' ? payload : {};
+        const items = Array.isArray(data.items) ? data.items.slice() : [];
+        const done = typeof data.done === 'number'
+            ? data.done
+            : items.filter(function (x) { return x && x.status === 'completed'; }).length;
+        const total = typeof data.total === 'number' ? data.total : items.length;
+        const snapshot = {
+            has_plan: !!(data.has_plan && items.length > 0),
+            items: items,
+            done: done,
+            total: total,
+            updatedAt: Date.now(),
+        };
+        this.todoBySession.set(sid, snapshot);
+        return snapshot;
+    },
+
+    getTodo(sessionId) {
+        return this.todoBySession.get(String(sessionId || '')) || null;
+    },
+
+    clearTodo(sessionId) {
+        this.todoBySession.delete(String(sessionId || ''));
+    },
+
+    clearSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.clearTokens(sid);
+        this.clearTodo(sid);
+    },
+};
+
+function setContextTokensForSession(sessionId, estimated, threshold) {
+    contextStore.setTokens(sessionId, estimated, threshold);
+}
+
+function selectContextTokens(sessionId) {
+    return contextStore.getTokens(sessionId);
+}
+
+function clearContextStateForSession(sessionId) {
+    contextStore.clearSession(sessionId);
+}
+
+function applyTodoPlanToStore(sessionId, payload) {
+    return contextStore.setTodo(sessionId, payload);
+}
+
+function selectTodoPlan(sessionId) {
+    return contextStore.getTodo(sessionId);
+}
+
+function clearTodoPlanState(sessionId) {
+    contextStore.clearTodo(sessionId);
+}
+`,P=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1076,6 +1158,14 @@ function applySessionEvent(event, opts) {
         setSessionServerStreamActive(sessionId, false);
         return { handled: true, runStateChanged: true };
     }
+    if (type === 'context_tokens') {
+        setContextTokensForSession(sessionId, event.estimated, event.threshold);
+        return { handled: false, contextStateChanged: true };
+    }
+    if (type === 'todo_plan') {
+        applyTodoPlanToStore(sessionId, event);
+        return { handled: false, contextStateChanged: true };
+    }
     if (type === 'subagent_start' || type === 'subagent_finish'
         || type === 'subagent_started' || type === 'subagent_finished') {
         applySubagentLifecycleToStore(sessionId, event);
@@ -1083,7 +1173,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false };
 }
-`,P=`function formatTokenCompact(n) {
+`,A=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -1153,17 +1243,13 @@ function scheduleContextTokensAfterPaint(sid) {
 
 function recordContextTokens(sessionId, estimated, threshold) {
     if (!sessionId) return;
-    if (estimated != null && Number(estimated) >= 0) {
-        contextTokensBySession[sessionId] = { estimated: Number(estimated), threshold: threshold };
-    } else {
-        delete contextTokensBySession[sessionId];
-    }
+    setContextTokensForSession(sessionId, estimated, threshold);
     if (sessionId === currentSessionId) setContextTokenLabel(estimated, threshold);
 }
 
 function applyContextTokenLabelForCurrentSession() {
     if (!currentSessionId) { setContextTokenLabel(null, null); return; }
-    const x = contextTokensBySession[currentSessionId];
+    const x = selectContextTokens(currentSessionId);
     if (x) setContextTokenLabel(x.estimated, x.threshold);
     else setContextTokenLabel(null, null);
 }
@@ -2272,7 +2358,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,A=`function ensureUiHoverTooltipEl() {
+`,B=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -2447,6 +2533,7 @@ function clearTodoForSessionLoad() {
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
     todoRefreshEpoch += 1;
+    if (currentSessionId) clearTodoPlanState(currentSessionId);
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
     if (root) root.classList.remove('is-open');
@@ -2592,6 +2679,7 @@ async function clearTodoPlan() {
     try {
         await fetch('/sessions/' + encodeURIComponent(sid) + '/todo_plan', { method: 'DELETE' });
     } catch (e) { /* ignore */ }
+    clearTodoPlanState(sid);
     hideTodoPlanPanel();
     const statsEl = document.getElementById('chat-todo-plan-stats');
     const listEl = document.getElementById('chat-todo-plan-list');
@@ -2604,18 +2692,17 @@ function applyTodoPlanFromPayload(data) {
     const listEl = document.getElementById('chat-todo-plan-list');
     const statsEl = document.getElementById('chat-todo-plan-stats');
     if (!root || !listEl || !statsEl) return;
-    const items = data && Array.isArray(data.items) ? data.items : [];
-    const has = !!(data && data.has_plan && items.length > 0);
+    const snapshot = applyTodoPlanToStore(currentSessionId, data) || { items: [], done: 0, total: 0, has_plan: false };
+    const items = snapshot.items;
+    const has = !!(snapshot.has_plan && items.length > 0);
     if (!has) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
         return;
     }
-    const done = typeof data.done === 'number'
-        ? data.done
-        : items.filter(function (x) { return x && x.status === 'completed'; }).length;
-    const total = typeof data.total === 'number' ? data.total : items.length;
+    const done = snapshot.done;
+    const total = snapshot.total;
     statsEl.textContent = String(done) + ' / ' + String(total) + ' 已完成';
     listEl.textContent = '';
     items.forEach(function (it) {
@@ -2637,6 +2724,7 @@ function applyTodoPlanFromPayload(data) {
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
     if (!sid) {
+        clearTodoPlanState(sid);
         hideTodoPlanPanel();
         const statsEl = document.getElementById('chat-todo-plan-stats');
         const listEl = document.getElementById('chat-todo-plan-list');
@@ -2657,8 +2745,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-
-`,B=`function removeMessagesFromNode(startWrap) {
+`,R=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5119,7 +5206,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,R=`var subagentCardSyncTimer = null;
+`,F=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -7415,7 +7502,7 @@ function updateSubagentBlockFinish(ctx, event) {
     }
     handleSubagentLifecycleEvent(event);
 }
-`,F=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,M=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7505,7 +7592,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,M=`function setSendButtonState() {
+`,N=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -7534,7 +7621,7 @@ function pauseCurrentRun() {
         return;
     }
     const ctx = run.ctx;
-    /* 先同步 abort 本地 fetch 与从 runningBySession 摘除，UI 立刻反映为「已停止」状态。
+    /* 先同步 abort 本地 fetch 与从 sessionStore 摘除，UI 立刻反映为「已停止」状态。
        后端 interrupt 走 fire-and-forget，避免被主线程阻塞时按钮响应迟滞。 */
     try { run.controller.abort(); } catch (e) { /* ignore */ }
     clearSessionRunState(sid);
@@ -7590,7 +7677,7 @@ function showLoading() {
 
 function hideLoading() { const loader = document.getElementById('chat-loading'); if (loader) loader.remove(); }
 
-/** 根据 runningBySession / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
+/** 根据 sessionStore / 服务端 stream_active / sessionUnreadComplete 更新黄点、绿点 */
 function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     const serverStreamActive = opts.serverStreamActive === true || isServerStreamActive(sessionId);
@@ -7801,7 +7888,7 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             persistSessionUnread();
             delete draftBySession[deletedSessionId];
             delete lastUserMessageBySession[deletedSessionId];
-            delete contextTokensBySession[deletedSessionId];
+            clearContextStateForSession(deletedSessionId);
             if (isSessionRunning(sess.id)) {
                 const r = getSessionRunState(sess.id);
                 try { if (r && r.controller) r.controller.abort(); } catch (err) { /* ignore */ }
@@ -8434,7 +8521,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,N=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,O=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8950,7 +9037,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,O=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,H=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9189,8 +9276,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTocPanel = toggleTocPanel;
 }
 
-`,H=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O];Function(`"use strict";
-`+H.join(`
+`,D=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,H];Function(`"use strict";
+`+D.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
