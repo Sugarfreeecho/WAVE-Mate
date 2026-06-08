@@ -9315,6 +9315,11 @@ function initPanelAutoCollapse() {
         _origApplyTodo.apply(this, arguments);
         setTimeout(updatePanelToggles, 100);
     };
+    var _origRenderTodo = renderTodoPlanForCurrentSession;
+    renderTodoPlanForCurrentSession = function() {
+        _origRenderTodo.apply(this, arguments);
+        setTimeout(updatePanelToggles, 100);
+    };
     var _origClearTodo = clearTodoPlan;
     clearTodoPlan = async function() {
         await _origClearTodo.apply(this, arguments);
@@ -9331,7 +9336,6 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-
 `,D=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,H];Function(`"use strict";
 `+D.join(`
 

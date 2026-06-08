@@ -220,6 +220,11 @@ function initPanelAutoCollapse() {
         _origApplyTodo.apply(this, arguments);
         setTimeout(updatePanelToggles, 100);
     };
+    var _origRenderTodo = renderTodoPlanForCurrentSession;
+    renderTodoPlanForCurrentSession = function() {
+        _origRenderTodo.apply(this, arguments);
+        setTimeout(updatePanelToggles, 100);
+    };
     var _origClearTodo = clearTodoPlan;
     clearTodoPlan = async function() {
         await _origClearTodo.apply(this, arguments);
@@ -236,4 +241,3 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-

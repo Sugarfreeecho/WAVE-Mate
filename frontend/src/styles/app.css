@@ -282,8 +282,8 @@ body {
 }
 :root.theme-light .session-section-count { background: rgba(0,0,0,0.05); color: var(--text-secondary); }
 .session-section-chev {
-    font-size: 0.5rem; color: var(--text-placeholder); transition: transform 0.25s var(--ease-out-expo);
-    display: inline-block; width: 0.65rem; text-align: center;
+    font-size: 1.6rem; color: var(--text-placeholder); transition: transform 0.25s var(--ease-out-expo);
+    display: inline-block; width: 1.6rem; text-align: center;
 }
 .session-section.is-collapsed .session-section-chev { transform: rotate(-90deg); }
 .session-section.is-collapsed .session-section-body { display: none; }
