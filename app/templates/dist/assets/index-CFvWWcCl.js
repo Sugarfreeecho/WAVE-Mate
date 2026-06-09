@@ -503,6 +503,10 @@ function showUiAlert(opts) {
         this.activeRunInfoBySession = next;
     },
 
+    activeRunIds() {
+        return Array.from(this.activeRunInfoBySession.keys());
+    },
+
     getActiveRunInfo(sessionId) {
         return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
     },
@@ -599,7 +603,13 @@ function selectArchivedDisplayCount() {
 }
 
 function selectIsSessionRunning(sessionId) {
-    return !!(sessionId && (sessionStore.hasRun(sessionId) || isServerStreamActive(sessionId)));
+    if (!sessionId) return false;
+    if (sessionStore.hasRun(sessionId)) return true;
+    const info = sessionStore.getActiveRunInfo(sessionId);
+    if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {
+        return !!info.run_active;
+    }
+    return !!isServerStreamActive(sessionId);
 }
 
 function selectRunForSession(sessionId) {
@@ -1995,6 +2005,7 @@ function newDomContext(streamEl) {
         progressScrollers: {},
         progressStream: {},
         keyContextStreamFilter: { phase: 'seek', carry: '' },
+        runStartedAt: null,
         llm: newLlmState(),
     };
 }
@@ -3349,6 +3360,22 @@ function formatProcDurationMs(ms) {
     return mi + '分' + sec + '秒';
 }
 
+function processStartedAtToProcNow(startedAt) {
+    if (!startedAt) return null;
+    var startedMs = Date.parse(String(startedAt));
+    if (!Number.isFinite(startedMs)) return null;
+    return procNow() - Math.max(0, Date.now() - startedMs);
+}
+
+function applyRunStartedAtToProcessGroup(agg, startedAt) {
+    if (!agg || !startedAt) return;
+    var t0 = processStartedAtToProcNow(startedAt);
+    if (!Number.isFinite(Number(t0))) return;
+    agg.dataset.procStartedAt = String(t0);
+    delete agg.dataset.procEndedAt;
+    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
+}
+
 function bumpAggregateMaxReactIter(agg, reactIter) {
     if (!agg) return;
     var n = Number(reactIter);
@@ -3627,7 +3654,10 @@ function ensureProcessGroup(ctx) {
         + '<span class="process-chev" aria-hidden="true">▼</span></div>'
         + '<div class="process-aggregate-brief"></div></div>'
         + '<div class="process-aggregate-body"></div>';
-    if (!replayingMessages) wrap.dataset.procStartedAt = String(procNow());
+    if (!replayingMessages) {
+        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
+        else wrap.dataset.procStartedAt = String(procNow());
+    }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
     bindProcessAggregate(wrap);
@@ -3828,6 +3858,19 @@ window.addEventListener('beforeunload', function () {
 });
 document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);
+    else if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
+});
+window.addEventListener('pageshow', function () {
+    if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
+});
+window.addEventListener('focus', function () {
+    if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
 });
 
 const WELCOME_HTML = \`<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 44 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;user-select:none;-webkit-user-select:none;pointer-events:none"><text x="22" y="16" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="14" font-style="italic" fill="white" stroke="none" transform="rotate(-6 22 11)">Sugar</text></svg></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>\`;
@@ -8390,6 +8433,45 @@ async function loadSessions(opts) {
     }
 }
 
+async function reconcileRunStateFromServer(opts) {
+    opts = opts || {};
+    let snapshot = null;
+    try {
+        snapshot = await fetchSessionsStateSnapshot();
+    } catch (e) {
+        if (!opts.silent) console.error('reconcile run state failed:', e);
+        return;
+    }
+    applySessionSnapshot(snapshot);
+    const active = new Set();
+    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
+        if (info && info.run_active === true) active.add(String(sid));
+    });
+    const localIds = [];
+    sessionStore.runsBySession.forEach(function (_run, sid) {
+        localIds.push(String(sid));
+    });
+    localIds.forEach(function (sid) {
+        if (!active.has(sid)) {
+            const run = getSessionRunState(sid);
+            try { if (run && run.controller) run.controller.abort(); } catch (err) { /* ignore */ }
+            clearSessionRunState(sid);
+        }
+    });
+    if (currentSessionId && active.has(currentSessionId)) {
+        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
+        const run = getSessionRunState(currentSessionId);
+        const ctx = run && run.ctx;
+        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+            ? ctx.currentProcessGroup
+            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));
+        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
+    }
+    syncSessionListIndicatorClasses();
+    setSendButtonState();
+    renderSessionListIfChanged(false);
+}
+
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};
@@ -8600,7 +8682,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,H=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,D=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -8765,8 +8847,10 @@ async function startContinueAfterSubagents(sessionId) {
         const preCount = await getUiEventCount();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        runCtx.runStartedAt = new Date().toISOString();
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
             runCtx = getSessionRunState(runSessionId).ctx;
+            if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();
         } else {
             runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
             resetLlmState(runCtx);
@@ -8824,11 +8908,16 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
+        runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
             bindProcessAggregate(existingProcessGroup);
-            if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
+            var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
+            if (activeInfo.started_at) {
+                applyRunStartedAtToProcessGroup(existingProcessGroup, activeInfo.started_at);
+            } else if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
                 existingProcessGroup.dataset.procStartedAt = String(procNow());
                 refreshProcessAggregateStats(existingProcessGroup);
             }
@@ -8959,6 +9048,7 @@ async function sendMessage() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
     }
+    runCtx.runStartedAt = new Date().toISOString();
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
     finalizeLlmStreamChunks(runCtx);
@@ -9125,7 +9215,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,D=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,H=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9368,7 +9458,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,q=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,H,D];Function(`"use strict";
+`,q=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H];Function(`"use strict";
 `+q.join(`
 
 `)+`

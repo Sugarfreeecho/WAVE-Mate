@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from agent import astream_events, astream_events_continuation, session_manager
 from agent_harness import PROJECT_ROOT, WORK_DIR, dotenv_file_path, refresh_executor_client_from_env
 from agent_loop import compute_context_tokens_for_session
-from session_lifecycle import is_run_active
+from session_lifecycle import get_run_started_at, is_run_active
 from session_event_bus import subscribe_session_events
 import agent_mcp
 from path_picker_util import pick_native_path
@@ -95,6 +95,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
                 "session_id": sid,
                 "stream_connections": stream_connections,
                 "run_active": run_active,
+                "started_at": get_run_started_at(sid),
             })
         try:
             pending = session_manager.count_actionable_pending_subagent_results(sid)

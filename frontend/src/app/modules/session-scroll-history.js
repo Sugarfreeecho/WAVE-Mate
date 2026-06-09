@@ -746,6 +746,7 @@ function newDomContext(streamEl) {
         progressScrollers: {},
         progressStream: {},
         keyContextStreamFilter: { phase: 'seek', carry: '' },
+        runStartedAt: null,
         llm: newLlmState(),
     };
 }

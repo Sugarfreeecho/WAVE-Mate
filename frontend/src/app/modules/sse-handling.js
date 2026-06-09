@@ -163,8 +163,10 @@ async function startContinueAfterSubagents(sessionId) {
         const preCount = await getUiEventCount();
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        runCtx.runStartedAt = new Date().toISOString();
         if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx) {
             runCtx = getSessionRunState(runSessionId).ctx;
+            if (!runCtx.runStartedAt) runCtx.runStartedAt = new Date().toISOString();
         } else {
             runCtx.lastUserEventIndex = Math.max(0, preCount - 1);
             resetLlmState(runCtx);
@@ -222,11 +224,16 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
+        var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
+        runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
             runCtx.currentProcessGroup = existingProcessGroup;
             bindProcessAggregate(existingProcessGroup);
-            if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
+            var activeInfo = sessionStore.getActiveRunInfo(runSessionId) || {};
+            if (activeInfo.started_at) {
+                applyRunStartedAtToProcessGroup(existingProcessGroup, activeInfo.started_at);
+            } else if (!existingProcessGroup.dataset.procStartedAt && !existingProcessGroup.dataset.procDurationMs) {
                 existingProcessGroup.dataset.procStartedAt = String(procNow());
                 refreshProcessAggregateStats(existingProcessGroup);
             }
@@ -357,6 +364,7 @@ async function sendMessage() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
     }
+    runCtx.runStartedAt = new Date().toISOString();
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
     finalizeLlmStreamChunks(runCtx);

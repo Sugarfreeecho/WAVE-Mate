@@ -716,6 +716,45 @@ async function loadSessions(opts) {
     }
 }
 
+async function reconcileRunStateFromServer(opts) {
+    opts = opts || {};
+    let snapshot = null;
+    try {
+        snapshot = await fetchSessionsStateSnapshot();
+    } catch (e) {
+        if (!opts.silent) console.error('reconcile run state failed:', e);
+        return;
+    }
+    applySessionSnapshot(snapshot);
+    const active = new Set();
+    sessionStore.activeRunInfoBySession.forEach(function (info, sid) {
+        if (info && info.run_active === true) active.add(String(sid));
+    });
+    const localIds = [];
+    sessionStore.runsBySession.forEach(function (_run, sid) {
+        localIds.push(String(sid));
+    });
+    localIds.forEach(function (sid) {
+        if (!active.has(sid)) {
+            const run = getSessionRunState(sid);
+            try { if (run && run.controller) run.controller.abort(); } catch (err) { /* ignore */ }
+            clearSessionRunState(sid);
+        }
+    });
+    if (currentSessionId && active.has(currentSessionId)) {
+        const info = sessionStore.getActiveRunInfo(currentSessionId) || {};
+        const run = getSessionRunState(currentSessionId);
+        const ctx = run && run.ctx;
+        const agg = ctx && ctx.currentProcessGroup && ctx.currentProcessGroup.isConnected
+            ? ctx.currentProcessGroup
+            : (getVisibleChatStream() && getVisibleChatStream().querySelector('.process-aggregate:last-of-type'));
+        if (agg && info.started_at) applyRunStartedAtToProcessGroup(agg, info.started_at);
+    }
+    syncSessionListIndicatorClasses();
+    setSendButtonState();
+    renderSessionListIfChanged(false);
+}
+
 async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     scrollBehavior = scrollBehavior || 'saved-or-bottom';
     opts = opts || {};

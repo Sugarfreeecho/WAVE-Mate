@@ -522,6 +522,22 @@ function formatProcDurationMs(ms) {
     return mi + '分' + sec + '秒';
 }
 
+function processStartedAtToProcNow(startedAt) {
+    if (!startedAt) return null;
+    var startedMs = Date.parse(String(startedAt));
+    if (!Number.isFinite(startedMs)) return null;
+    return procNow() - Math.max(0, Date.now() - startedMs);
+}
+
+function applyRunStartedAtToProcessGroup(agg, startedAt) {
+    if (!agg || !startedAt) return;
+    var t0 = processStartedAtToProcNow(startedAt);
+    if (!Number.isFinite(Number(t0))) return;
+    agg.dataset.procStartedAt = String(t0);
+    delete agg.dataset.procEndedAt;
+    if (!agg.dataset.procDurationMs) refreshProcessAggregateStats(agg);
+}
+
 function bumpAggregateMaxReactIter(agg, reactIter) {
     if (!agg) return;
     var n = Number(reactIter);
@@ -800,7 +816,10 @@ function ensureProcessGroup(ctx) {
         + '<span class="process-chev" aria-hidden="true">▼</span></div>'
         + '<div class="process-aggregate-brief"></div></div>'
         + '<div class="process-aggregate-body"></div>';
-    if (!replayingMessages) wrap.dataset.procStartedAt = String(procNow());
+    if (!replayingMessages) {
+        if (ctx.runStartedAt) applyRunStartedAtToProcessGroup(wrap, ctx.runStartedAt);
+        else wrap.dataset.procStartedAt = String(procNow());
+    }
     delete wrap.dataset.maxReactIter;
     (ctx.stream || chatContainer).appendChild(wrap);
     bindProcessAggregate(wrap);
@@ -1001,6 +1020,19 @@ window.addEventListener('beforeunload', function () {
 });
 document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') saveChatScrollForSession(currentSessionId);
+    else if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
+});
+window.addEventListener('pageshow', function () {
+    if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
+});
+window.addEventListener('focus', function () {
+    if (typeof reconcileRunStateFromServer === 'function') {
+        void reconcileRunStateFromServer({ silent: true });
+    }
 });
 
 const WELCOME_HTML = `<div class="welcome" role="status"><div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 44 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;user-select:none;-webkit-user-select:none;pointer-events:none"><text x="22" y="16" text-anchor="middle" font-family="'Brush Script MT','Segoe Script','Pacifico','Dancing Script',cursive" font-size="14" font-style="italic" fill="white" stroke="none" transform="rotate(-6 22 11)">Sugar</text></svg></div><strong>开始一段新的对话</strong><p>在左侧侧栏新建或选择会话。Enter 发送，Ctrl+Enter / Shift+Enter 换行。</p></div>`;

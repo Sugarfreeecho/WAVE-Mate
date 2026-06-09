@@ -185,6 +185,10 @@ const sessionStore = {
         this.activeRunInfoBySession = next;
     },
 
+    activeRunIds() {
+        return Array.from(this.activeRunInfoBySession.keys());
+    },
+
     getActiveRunInfo(sessionId) {
         return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
     },

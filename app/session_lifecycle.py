@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from typing import Dict, Iterable, List, Set
+from datetime import datetime, timezone
+from typing import Dict, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _deleted: Set[str] = set()
 _run_tasks: Dict[str, Set[asyncio.Task]] = {}
+_run_started_at: Dict[str, str] = {}
 
 
 def mark_session_deleted(session_id: str) -> None:
@@ -38,6 +40,7 @@ def register_run_task(session_id: str, task: asyncio.Task) -> None:
         return
     with _lock:
         _run_tasks.setdefault(sid, set()).add(task)
+        _run_started_at.setdefault(sid, datetime.now(timezone.utc).isoformat())
 
     def _on_done(t: asyncio.Task) -> None:
         with _lock:
@@ -47,6 +50,7 @@ def register_run_task(session_id: str, task: asyncio.Task) -> None:
             bucket.discard(t)
             if not bucket:
                 _run_tasks.pop(sid, None)
+                _run_started_at.pop(sid, None)
 
     task.add_done_callback(_on_done)
 
@@ -58,6 +62,14 @@ def is_run_active(session_id: str) -> bool:
     with _lock:
         tasks = list(_run_tasks.get(sid, ()))
     return any(t and not t.done() for t in tasks)
+
+
+def get_run_started_at(session_id: str) -> Optional[str]:
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
+    with _lock:
+        return _run_started_at.get(sid)
 
 
 async def _cancel_tasks(tasks: List[asyncio.Task], timeout: float = 8.0) -> None:

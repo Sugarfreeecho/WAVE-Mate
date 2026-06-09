@@ -32,7 +32,13 @@ function selectArchivedDisplayCount() {
 }
 
 function selectIsSessionRunning(sessionId) {
-    return !!(sessionId && (sessionStore.hasRun(sessionId) || isServerStreamActive(sessionId)));
+    if (!sessionId) return false;
+    if (sessionStore.hasRun(sessionId)) return true;
+    const info = sessionStore.getActiveRunInfo(sessionId);
+    if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {
+        return !!info.run_active;
+    }
+    return !!isServerStreamActive(sessionId);
 }
 
 function selectRunForSession(sessionId) {

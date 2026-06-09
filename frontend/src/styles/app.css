@@ -265,6 +265,7 @@ body {
     color: var(--text-tertiary); cursor: pointer;
     font-family: var(--sans); text-align: left;
     transition: border-color 0.2s, color 0.2s, background 0.2s;
+    box-sizing: border-box;
 }
 .session-section-toggle:hover {
     color: var(--text-secondary);
@@ -283,7 +284,8 @@ body {
 :root.theme-light .session-section-count { background: rgba(0,0,0,0.05); color: var(--text-secondary); }
 .session-section-chev {
     font-size: 1.07rem; color: var(--text-placeholder); transition: transform 0.25s var(--ease-out-expo);
-    display: inline-block; width: 1.07rem; text-align: center;
+    display: inline-block; width: 1.07rem; min-width: 1.07rem; max-width: 1.07rem; text-align: center;
+    box-sizing: border-box;
 }
 .session-section.is-collapsed .session-section-chev { transform: rotate(-90deg); }
 .session-section.is-collapsed .session-section-body { display: none; }
@@ -2258,98 +2260,7 @@ body {
     display: none; white-space: pre-wrap; word-break: break-word; line-height: 1.65;
 }
 
-/* 折叠条 */
-.user-msg-chevron {
-    position: relative;
-    display: flex; align-items: center; justify-content: center;
-    height: 1.4rem;
-    margin: 0.2rem 0 0;
-    cursor: pointer;
-    color: var(--text-secondary);
-    isolation: isolate;
-    transition: color 0.16s var(--ease-out-expo);
-}
-.user-msg-chevron:hover { color: var(--text-primary); }
-.user-msg-chevron::before {
-    content: "";
-    position: absolute; inset: 0;
-    z-index: -1; pointer-events: none;
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.1) 42%,
-        rgba(0, 0, 0, 0.28) 100%
-    );
-    transition: background 0.18s var(--ease-out-expo);
-}
-.user-msg-chevron:hover::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.14) 30%,
-        rgba(0, 0, 0, 0.34) 100%
-    );
-}
-:root.theme-light .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.05) 42%,
-        rgba(0, 0, 0, 0.14) 100%
-    );
-}
-:root.theme-light .user-msg-chevron:hover::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.08) 30%,
-        rgba(0, 0, 0, 0.18) 100%
-    );
-}
-
-/* V形箭头 */
-.user-msg-chevron::after {
-    content: "";
-    position: relative; z-index: 1;
-    display: block;
-    width: 12px; height: 8px;
-    flex-shrink: 0;
-    transition: transform 0.18s var(--ease-out-expo);
-    background:
-        linear-gradient(to bottom right, transparent 48%, currentColor 48%, currentColor 52%, transparent 52%) no-repeat left 50% / 50% 2px,
-        linear-gradient(to bottom left,  transparent 48%, currentColor 48%, currentColor 52%, transparent 52%) no-repeat right 50% / 50% 2px;
-}
-.user-msg-chevron:hover::after { transform: scale(1.12); }
-
-/* 展开态 — 提高优先级：在 message.user.is-collapsible 作用域内覆盖 */
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-summary {
-    display: none;
-}
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible .user-msg-full {
-    display: block;
-}
-.msg-wrap--user.user-msg-expanded .message.user.is-collapsible {
-    padding-bottom: 0.5rem;
-}
-.msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.05) 55%,
-        rgba(0, 0, 0, 0.12) 100%
-    );
-}
-:root.theme-light .msg-wrap--user.user-msg-expanded .user-msg-chevron::before {
-    background: linear-gradient(
-        to bottom,
-        transparent 0%,
-        rgba(0, 0, 0, 0.03) 55%,
-        rgba(0, 0, 0, 0.08) 100%
-    );
-}
-.msg-wrap--user.user-msg-expanded .user-msg-chevron::after { transform: rotate(180deg); }
-.msg-wrap--user.user-msg-expanded .user-msg-chevron:hover::after { transform: rotate(180deg) scale(1.12); }
+/* 旧实现（:after 渐变线条箭头）已移除，由下方 .chevron-arrow 三角形箭头替代 */
 
 /* ═══════════════ 用户消息折叠 ═══════════════ */
 .message.user.is-collapsible {
