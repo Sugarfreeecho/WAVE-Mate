@@ -1364,6 +1364,213 @@ function refreshSubagentToggleFromGrid(flat) {
     if (toggleBadge) toggleBadge.textContent = String(list.length) + (runningN ? (' · ' + runningN) : '');
     toggleBtn.classList.toggle('is-running', runningN > 0);
 }
+
+function createSubagentMiniMessage(role, content, eventIndex) {
+    var wrap = document.createElement('div');
+    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
+    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
+    if (eventIndex != null) wrap.setAttribute('data-event-index', String(eventIndex));
+    var div = document.createElement('div');
+    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
+    var rawStr = content == null ? '' : String(content);
+    if (role === 'user') {
+        var lineCount = rawStr.split('\\n').length;
+        if (lineCount > 10) {
+            wrap.classList.add('has-turn-process');
+            div.classList.add('is-collapsible');
+            var sum = document.createElement('div');
+            sum.className = 'user-msg-summary';
+            sum.textContent = rawStr.split('\\n').slice(0, 10).join('\\n') + '\\n...';
+            var ful = document.createElement('div');
+            ful.className = 'user-msg-full';
+            ful.textContent = rawStr;
+            var ch = document.createElement('div');
+            ch.className = 'user-msg-chevron';
+            var arrow = document.createElement('span');
+            arrow.className = 'chevron-arrow';
+            ch.appendChild(arrow);
+            ch.addEventListener('click', function(e) {
+                e.stopPropagation();
+                wrap.classList.toggle('user-msg-expanded');
+            });
+            div.appendChild(sum);
+            div.appendChild(ful);
+            div.appendChild(ch);
+        } else {
+            div.textContent = rawStr;
+        }
+    }
+    else {
+        div.innerHTML = renderMarkdown(rawStr);
+        enhanceAssistantMessageContent(div);
+    }
+    wrap.appendChild(div);
+    return wrap;
+}
+
+function openSubagentTurn(ctx, userContent, eventIndex) {
+    if (!ctx || !ctx._subagentBody) return null;
+    var userRaw = userContent == null ? '' : String(userContent);
+    if (userRaw.trim() && ctx.currentTurn && !ctx.currentTurn.querySelector('.msg-wrap--user')) {
+        var userWrap0 = createSubagentMiniMessage('user', userRaw, eventIndex);
+        ctx.currentTurn.insertBefore(userWrap0, ctx.currentTurn.firstChild);
+        bindSubagentTurnUserToggle(ctx.currentTurn, userWrap0);
+        markSubagentTurnHasProcess(ctx.currentTurn);
+        if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
+        return ctx.currentTurn;
+    }
+    sealSubagentTurn(ctx);
+    var turn = document.createElement('div');
+    turn.className = 'subagent-turn';
+    var userWrap = userRaw.trim() ? createSubagentMiniMessage('user', userRaw, eventIndex) : null;
+    var processEl = document.createElement('div');
+    processEl.className = 'subagent-turn-process';
+    var finalSlot = document.createElement('div');
+    finalSlot.className = 'subagent-turn-final-slot';
+    if (userWrap) turn.appendChild(userWrap);
+    turn.appendChild(processEl);
+    turn.appendChild(finalSlot);
+    ctx._subagentBody.appendChild(turn);
+    ctx.currentTurn = turn;
+    ctx._subagentTurnProcess = processEl;
+    ctx._subagentTurnFinalSlot = finalSlot;
+    if (userWrap) bindSubagentTurnUserToggle(turn, userWrap);
+    return turn;
+}
+
+function ensureSubagentTurnForProcess(ctx, eventIndex) {
+    if (ctx && ctx._subagentTurnProcess && ctx.currentTurn) return ctx.currentTurn;
+    return openSubagentTurn(ctx, '', eventIndex);
+}
+
+function appendSubagentFinalToTurn(ctx, content, eventIndex) {
+    if (!ctx) return;
+    if (!ctx.currentTurn) openSubagentTurn(ctx, '', eventIndex);
+    var slot = ctx._subagentTurnFinalSlot;
+    if (!slot && ctx.currentTurn) slot = ctx.currentTurn.querySelector('.subagent-turn-final-slot');
+    if (!slot) return;
+    var existing = slot.querySelector('.msg-wrap--assistant');
+    var txt = content == null ? '' : String(content);
+    if (existing) {
+        var msgEl = existing.querySelector('.message.assistant');
+        if (msgEl) {
+            msgEl.innerHTML = renderMarkdown(txt);
+            enhanceAssistantMessageContent(msgEl);
+        }
+        return;
+    }
+    slot.appendChild(createSubagentMiniMessage('assistant', txt, eventIndex));
+    markSubagentTurnHasProcess(ctx.currentTurn);
+}
+
+function renderSubagentProcessEvents(bodyEl, hostEl, events, agentId, eventIndexBase) {
+    if (!bodyEl) return Promise.resolve();
+    var card = hostEl || (bodyEl.closest ? bodyEl.closest('.subagent-grid-card, .subagent-block') : null);
+    if (card) {
+        delete card.dataset.procDurationMs;
+        delete card.dataset.procReactLoops;
+        delete card.dataset.procToolCalls;
+        delete card.dataset.procToolFails;
+        delete card.dataset.procLiveToolCalls;
+        delete card.dataset.procLiveToolFails;
+    }
+    bodyEl.innerHTML = '';
+    delete bodyEl.dataset.cacheClean;
+    delete bodyEl.dataset.finalOnly;
+    bodyEl.classList.remove('is-final-only');
+    bodyEl.classList.add('subagent-dialogue-body');
+    if (!events || !events.length) {
+        bodyEl.innerHTML = '<div class="subagent-detail-empty">(暂无事件)</div>';
+        return Promise.resolve();
+    }
+    var ctx = getSubagentCardStreamCtx(bodyEl, hostEl, agentId);
+    resetSubagentTurnStreamState(ctx);
+    var idx = 0;
+    var renderToken = String(Date.now()) + ':' + Math.random();
+    bodyEl.dataset.renderToken = renderToken;
+    bodyEl.dataset.rendering = '1';
+    return new Promise(function (resolve) {
+    function finish() {
+        if (bodyEl.dataset.renderToken !== renderToken) {
+            resolve();
+            return;
+        }
+        finalizeLlmStreamChunks(ctx);
+        finalizeProgressStreamChunks(ctx);
+        rebindSubagentCardBody(bodyEl, hostEl, agentId);
+        setSubagentCardEventCount(agentId, (events || []).length);
+        delete bodyEl.dataset.streamReady;
+        delete bodyEl.dataset.rendering;
+        refreshSubagentProcessChunksLightly(bodyEl);
+        if (card && (events || []).some(function (ev) { return ev && ev.type === 'final'; })) {
+            markSubagentCardCompleted(card, true);
+        }
+        if (currentSessionId) {
+            rememberSubagentBodyCache(currentSessionId, agentId, bodyEl.innerHTML);
+            bodyEl.dataset.cacheClean = '1';
+        }
+        resolve();
+    }
+    function step() {
+        if (!bodyEl.isConnected || bodyEl.dataset.renderToken !== renderToken) {
+            resolve();
+            return;
+        }
+        var end = Math.min(idx + SUBAGENT_DETAIL_RENDER_BATCH, events.length);
+        for (; idx < end; idx += 1) {
+            var ev = events[idx];
+            if (ev && typeof ev === 'object') dispatchSubagentCardEvent(ctx, hostEl, ev, (eventIndexBase || 0) + idx, agentId);
+        }
+        if (idx < events.length) {
+            scheduleSubagentDetailWork(step);
+        } else {
+            finish();
+        }
+    }
+    step();
+    });
+}
+
+function renderSubagentLatestFinalOnly(bodyEl, hostEl, events, agentId) {
+    if (!bodyEl) return Promise.resolve();
+    bodyEl.innerHTML = '';
+    delete bodyEl.dataset.cacheClean;
+    delete bodyEl.dataset.renderToken;
+    delete bodyEl.dataset.rendering;
+    delete bodyEl.dataset.streamReady;
+    bodyEl.classList.add('subagent-dialogue-body', 'is-final-only');
+    var finalIdx = -1;
+    for (var i = (events || []).length - 1; i >= 0; i -= 1) {
+        if (events[i] && events[i].type === 'final') {
+            finalIdx = i;
+            break;
+        }
+    }
+    var ctx = getSubagentCardStreamCtx(bodyEl, hostEl, agentId);
+    resetSubagentTurnStreamState(ctx);
+    var lastUser = -1;
+    if (finalIdx >= 0) {
+        openSubagentTurn(ctx, '', finalIdx);
+        appendSubagentFinalToTurn(ctx, events[finalIdx].content || '', finalIdx);
+    } else {
+        for (var u = (events || []).length - 1; u >= 0; u -= 1) {
+            if (events[u] && events[u].type === 'user') { lastUser = u; break; }
+        }
+        if (lastUser >= 0) openSubagentTurn(ctx, events[lastUser].content || '', lastUser);
+        else bodyEl.innerHTML = '<div class="subagent-detail-empty">(暂无 final 结果)</div>';
+    }
+    bodyEl.dataset.loaded = '1';
+    bodyEl.dataset.finalOnly = '1';
+    bodyEl.dataset.subagentSliceStart = String(finalIdx >= 0 ? finalIdx : Math.max(0, lastUser));
+    delete bodyEl.dataset.historyComplete;
+    bodyEl._subagentEvents = events || [];
+    rebindSubagentCardBody(bodyEl, hostEl, agentId);
+    if (hostEl && finalIdx >= 0) markSubagentCardCompleted(hostEl, true);
+    requestAnimationFrame(function () {
+        if (bodyEl.isConnected) bodyEl.scrollTop = 0;
+    });
+    return Promise.resolve();
+}
 `,A=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
@@ -6465,105 +6672,6 @@ function bindSubagentTurnUserToggle(turn, userWrap) {
     /* 统一由 bindSubagentCardBodyInteractions 委托处理，避免重复 toggle */
 }
 
-function createSubagentMiniMessage(role, content, eventIndex) {
-    var wrap = document.createElement('div');
-    wrap.className = 'msg-wrap msg-wrap--' + (role === 'user' ? 'user' : 'assistant');
-    if (role === 'assistant') wrap.classList.add('msg-wrap--answer-frame');
-    if (eventIndex != null) wrap.setAttribute('data-event-index', String(eventIndex));
-    var div = document.createElement('div');
-    div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
-    var rawStr = content == null ? '' : String(content);
-    if (role === 'user') {
-        var lineCount = rawStr.split('\\n').length;
-        if (lineCount > 10) {
-            wrap.classList.add('has-turn-process');
-            div.classList.add('is-collapsible');
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\\n').slice(0, 10).join('\\n') + '\\n...';
-            var ful = document.createElement('div');
-            ful.className = 'user-msg-full';
-            ful.textContent = rawStr;
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
-            div.appendChild(ful);
-            div.appendChild(ch);
-        } else {
-            div.textContent = rawStr;
-        }
-    }
-    else {
-        div.innerHTML = renderMarkdown(rawStr);
-        enhanceAssistantMessageContent(div);
-    }
-    wrap.appendChild(div);
-    return wrap;
-}
-
-function openSubagentTurn(ctx, userContent, eventIndex) {
-    if (!ctx || !ctx._subagentBody) return null;
-    var userRaw = userContent == null ? '' : String(userContent);
-    if (userRaw.trim() && ctx.currentTurn && !ctx.currentTurn.querySelector('.msg-wrap--user')) {
-        var userWrap0 = createSubagentMiniMessage('user', userRaw, eventIndex);
-        ctx.currentTurn.insertBefore(userWrap0, ctx.currentTurn.firstChild);
-        bindSubagentTurnUserToggle(ctx.currentTurn, userWrap0);
-        markSubagentTurnHasProcess(ctx.currentTurn);
-        if (typeof eventIndex === 'number') ctx.lastUserEventIndex = eventIndex;
-        return ctx.currentTurn;
-    }
-    sealSubagentTurn(ctx);
-    var turn = document.createElement('div');
-    turn.className = 'subagent-turn';
-    var userRaw = userContent == null ? '' : String(userContent);
-    var userWrap = userRaw.trim() ? createSubagentMiniMessage('user', userRaw, eventIndex) : null;
-    var processEl = document.createElement('div');
-    processEl.className = 'subagent-turn-process';
-    var finalSlot = document.createElement('div');
-    finalSlot.className = 'subagent-turn-final-slot';
-    if (userWrap) turn.appendChild(userWrap);
-    turn.appendChild(processEl);
-    turn.appendChild(finalSlot);
-    ctx._subagentBody.appendChild(turn);
-    ctx.currentTurn = turn;
-    ctx._subagentTurnProcess = processEl;
-    ctx._subagentTurnFinalSlot = finalSlot;
-    if (userWrap) bindSubagentTurnUserToggle(turn, userWrap);
-    return turn;
-}
-
-function ensureSubagentTurnForProcess(ctx, eventIndex) {
-    if (ctx && ctx._subagentTurnProcess && ctx.currentTurn) return ctx.currentTurn;
-    return openSubagentTurn(ctx, '', eventIndex);
-}
-
-function appendSubagentFinalToTurn(ctx, content, eventIndex) {
-    if (!ctx) return;
-    if (!ctx.currentTurn) openSubagentTurn(ctx, '', eventIndex);
-    var slot = ctx._subagentTurnFinalSlot;
-    if (!slot && ctx.currentTurn) slot = ctx.currentTurn.querySelector('.subagent-turn-final-slot');
-    if (!slot) return;
-    var existing = slot.querySelector('.msg-wrap--assistant');
-    var txt = content == null ? '' : String(content);
-    if (existing) {
-        var msgEl = existing.querySelector('.message.assistant');
-        if (msgEl) {
-            msgEl.innerHTML = renderMarkdown(txt);
-            enhanceAssistantMessageContent(msgEl);
-        }
-        return;
-    }
-    slot.appendChild(createSubagentMiniMessage('assistant', txt, eventIndex));
-    markSubagentTurnHasProcess(ctx.currentTurn);
-}
-
 function dispatchSubagentCardEvent(ctx, card, event, eventIndex, agentId) {
     if (!event || typeof event !== 'object') return;
     if (shouldSkipSubagentProcessEvent(event)) return;
@@ -7118,115 +7226,6 @@ function restoreSubagentGridState(grid, detailCache, sessionId) {
             queueSubagentCardBodyLoad(card, sessionId);
         }
     });
-}
-
-function renderSubagentProcessEvents(bodyEl, hostEl, events, agentId, eventIndexBase) {
-    if (!bodyEl) return Promise.resolve();
-    var card = hostEl || (bodyEl.closest ? bodyEl.closest('.subagent-grid-card, .subagent-block') : null);
-    if (card) {
-        delete card.dataset.procDurationMs;
-        delete card.dataset.procReactLoops;
-        delete card.dataset.procToolCalls;
-        delete card.dataset.procToolFails;
-        delete card.dataset.procLiveToolCalls;
-        delete card.dataset.procLiveToolFails;
-    }
-    bodyEl.innerHTML = '';
-    delete bodyEl.dataset.cacheClean;
-    delete bodyEl.dataset.finalOnly;
-    bodyEl.classList.remove('is-final-only');
-    bodyEl.classList.add('subagent-dialogue-body');
-    if (!events || !events.length) {
-        bodyEl.innerHTML = '<div class="subagent-detail-empty">(暂无事件)</div>';
-        return Promise.resolve();
-    }
-    var ctx = getSubagentCardStreamCtx(bodyEl, hostEl, agentId);
-    resetSubagentTurnStreamState(ctx);
-    var idx = 0;
-    var renderToken = String(Date.now()) + ':' + Math.random();
-    bodyEl.dataset.renderToken = renderToken;
-    bodyEl.dataset.rendering = '1';
-    return new Promise(function (resolve) {
-    function finish() {
-        if (bodyEl.dataset.renderToken !== renderToken) {
-            resolve();
-            return;
-        }
-        finalizeLlmStreamChunks(ctx);
-        finalizeProgressStreamChunks(ctx);
-        rebindSubagentCardBody(bodyEl, hostEl, agentId);
-        setSubagentCardEventCount(agentId, (events || []).length);
-        delete bodyEl.dataset.streamReady;
-        delete bodyEl.dataset.rendering;
-        refreshSubagentProcessChunksLightly(bodyEl);
-        if (card && (events || []).some(function (ev) { return ev && ev.type === 'final'; })) {
-            markSubagentCardCompleted(card, true);
-        }
-        if (currentSessionId) {
-            rememberSubagentBodyCache(currentSessionId, agentId, bodyEl.innerHTML);
-            bodyEl.dataset.cacheClean = '1';
-        }
-        resolve();
-    }
-    function step() {
-        if (!bodyEl.isConnected || bodyEl.dataset.renderToken !== renderToken) {
-            resolve();
-            return;
-        }
-        var end = Math.min(idx + SUBAGENT_DETAIL_RENDER_BATCH, events.length);
-        for (; idx < end; idx += 1) {
-            var ev = events[idx];
-            if (ev && typeof ev === 'object') dispatchSubagentCardEvent(ctx, hostEl, ev, (eventIndexBase || 0) + idx, agentId);
-        }
-        if (idx < events.length) {
-            scheduleSubagentDetailWork(step);
-        } else {
-            finish();
-        }
-    }
-    step();
-    });
-}
-
-function renderSubagentLatestFinalOnly(bodyEl, hostEl, events, agentId) {
-    if (!bodyEl) return Promise.resolve();
-    bodyEl.innerHTML = '';
-    delete bodyEl.dataset.cacheClean;
-    delete bodyEl.dataset.renderToken;
-    delete bodyEl.dataset.rendering;
-    delete bodyEl.dataset.streamReady;
-    bodyEl.classList.add('subagent-dialogue-body', 'is-final-only');
-    var finalIdx = -1;
-    for (var i = (events || []).length - 1; i >= 0; i -= 1) {
-        if (events[i] && events[i].type === 'final') {
-            finalIdx = i;
-            break;
-        }
-    }
-    var ctx = getSubagentCardStreamCtx(bodyEl, hostEl, agentId);
-    resetSubagentTurnStreamState(ctx);
-    if (finalIdx >= 0) {
-        openSubagentTurn(ctx, '', finalIdx);
-        appendSubagentFinalToTurn(ctx, events[finalIdx].content || '', finalIdx);
-    } else {
-        var lastUser = -1;
-        for (var u = (events || []).length - 1; u >= 0; u -= 1) {
-            if (events[u] && events[u].type === 'user') { lastUser = u; break; }
-        }
-        if (lastUser >= 0) openSubagentTurn(ctx, events[lastUser].content || '', lastUser);
-        else bodyEl.innerHTML = '<div class="subagent-detail-empty">(暂无 final 结果)</div>';
-    }
-    bodyEl.dataset.loaded = '1';
-    bodyEl.dataset.finalOnly = '1';
-    bodyEl.dataset.subagentSliceStart = String(finalIdx >= 0 ? finalIdx : Math.max(0, lastUser));
-    delete bodyEl.dataset.historyComplete;
-    bodyEl._subagentEvents = events || [];
-    rebindSubagentCardBody(bodyEl, hostEl, agentId);
-    if (hostEl && finalIdx >= 0) markSubagentCardCompleted(hostEl, true);
-    requestAnimationFrame(function () {
-        if (bodyEl.isConnected) bodyEl.scrollTop = 0;
-    });
-    return Promise.resolve();
 }
 
 function findSubagentSliceStartByTurns(events, beforeIndex, turnCount) {
