@@ -1647,7 +1647,156 @@ function rememberSubagentBodyCache(sessionId, agentId, html) {
 function readSubagentBodyCache(sessionId, agentId) {
     return subagentBodyHtmlCache[subagentBodyCacheKey(sessionId, agentId)] || '';
 }
-`,B=`const contextStore = {
+`,B=`async function toggleSubagentOutputPanel(card, sessionId) {
+    if (!card || !sessionId) return;
+    var agentId = card.getAttribute('data-agent-id') || '';
+    if (!agentId) return;
+    var panel = card.querySelector('.subagent-output-panel');
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'subagent-output-panel';
+        var body = card.querySelector('.subagent-card-body');
+        if (body) card.insertBefore(panel, body);
+        else card.appendChild(panel);
+    }
+    var wasOpen = panel.classList.contains('is-open');
+    panel.classList.toggle('is-open', !wasOpen);
+    var btn = card.querySelector('.subagent-card-output');
+    if (btn) btn.classList.toggle('is-active', !wasOpen);
+    if (wasOpen || panel.dataset.loaded === '1' || panel.dataset.loading === '1') return;
+    panel.dataset.loading = '1';
+    panel.innerHTML = '<div class="subagent-output-empty">加载中...</div>';
+    try {
+        var resp = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(agentId) + '/output');
+        var data = await resp.json();
+        if (!resp.ok || !data || !data.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));
+        var content = String(data.content || '').trim();
+        panel.innerHTML = content
+            ? '<div class="subagent-output-content markdown-body">' + renderMarkdown(content) + '</div>'
+            : '<div class="subagent-output-empty">(无输出)</div>';
+        enhanceAssistantMessageContent(panel);
+        panel.dataset.loaded = '1';
+    } catch (e) {
+        panel.innerHTML = '<div class="subagent-output-empty">加载失败: ' + escapeHtml(String(e)) + '</div>';
+    } finally {
+        delete panel.dataset.loading;
+    }
+}
+
+function bindSubagentGridActions(grid, sessionId) {
+    if (!grid) return;
+    grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
+        bindProcessAggregate(card);
+    });
+    grid.querySelectorAll('.subagent-card-stop').forEach(function (btn) {
+        if (btn.dataset.subagentStopBound) return;
+        btn.dataset.subagentStopBound = '1';
+        btn.addEventListener('click', async function (e) {
+            e.stopPropagation();
+            var aid = btn.getAttribute('data-agent-id');
+            if (!aid || !sessionId) return;
+            try {
+                await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(aid) + '/interrupt', { method: 'POST' });
+            } catch (err) { /* ignore */ }
+            var menu = btn.closest('.subagent-card-menu');
+            if (menu) menu.classList.remove('is-open');
+            scheduleRefreshSubagentTreePanel(sessionId);
+        });
+    });
+    grid.querySelectorAll('.subagent-card-delete').forEach(function (btn) {
+        if (btn.dataset.subagentDeleteBound) return;
+        btn.dataset.subagentDeleteBound = '1';
+        btn.addEventListener('click', async function (e) {
+            e.stopPropagation();
+            var aid = btn.getAttribute('data-agent-id');
+            if (!aid || !sessionId) return;
+            var ok = await openUiModal({
+                title: '删除 Subagent',
+                subtitle: aid.slice(0, 8) + '…',
+                message: '将删除该 subagent 的会话记录、过程卡片及其嵌套子任务。该操作不可撤销。',
+                danger: true,
+                confirmText: '删除',
+                cancelText: '取消',
+            });
+            if (!ok) return;
+            var menu = btn.closest('.subagent-card-menu');
+            if (menu) menu.classList.remove('is-open');
+            btn.disabled = true;
+            try {
+                var resp = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(aid), { method: 'DELETE' });
+                if (!resp.ok) {
+                    showUiAlert({ title: '删除失败', message: '无法删除该 Subagent，请稍后重试。', variant: 'error' });
+                    btn.disabled = false;
+                    return;
+                }
+                forgetSubagentBodyCache(sessionId, aid);
+                subagentStore.remove(sessionId, aid);
+                delete subagentCardLoadQueued[aid];
+                var card = btn.closest('.subagent-grid-card');
+                if (card) card.remove();
+                scheduleRefreshSubagentTreePanel(sessionId, 0);
+            } catch (err) {
+                btn.disabled = false;
+                showUiAlert({ title: '删除失败', message: String((err && err.message) || err || 'unknown error'), variant: 'error' });
+            }
+        });
+    });
+    grid.querySelectorAll('.subagent-card-menu-btn').forEach(function (btn) {
+        if (btn.dataset.subagentMenuBound) return;
+        btn.dataset.subagentMenuBound = '1';
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var menu = btn.closest('.subagent-card-menu');
+            if (!menu) return;
+            var open = !menu.classList.contains('is-open');
+            grid.querySelectorAll('.subagent-card-menu.is-open').forEach(function (m) {
+                if (m !== menu) {
+                    m.classList.remove('is-open');
+                    var b = m.querySelector('.subagent-card-menu-btn');
+                    if (b) b.setAttribute('aria-expanded', 'false');
+                }
+            });
+            menu.classList.toggle('is-open', open);
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+    });
+    grid.querySelectorAll('.subagent-card-expand').forEach(function (btn) {
+        if (btn.dataset.subagentExpandBound) return;
+        btn.dataset.subagentExpandBound = '1';
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var card = btn.closest('.subagent-grid-card');
+            if (card) toggleSubagentCardExpanded(card);
+        });
+    });
+    grid.querySelectorAll('.subagent-card-body').forEach(function (body) {
+        if (body.dataset.subagentBodyExpandBound) return;
+        body.dataset.subagentBodyExpandBound = '1';
+        body.addEventListener('click', function (e) {
+            var card = body.closest('.subagent-grid-card');
+            if (!card || card.classList.contains('is-expanded')) return;
+            var target = e.target;
+            if (target && target.closest && target.closest('button,a,input,textarea,select,.feed-chunk-scroller,.copy-btn,.subagent-card-menu,.msg-wrap--user')) return;
+            var sel = window.getSelection && window.getSelection();
+            if (sel && String(sel).trim()) return;
+            setSubagentCardExpanded(card, true);
+        });
+    });
+    grid.querySelectorAll('.subagent-card-output').forEach(function (btn) {
+        if (btn.dataset.subagentOutputBound) return;
+        btn.dataset.subagentOutputBound = '1';
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var card = btn.closest('.subagent-grid-card');
+            if (card) toggleSubagentOutputPanel(card, sessionId);
+            var menu = btn.closest('.subagent-card-menu');
+            if (menu) menu.classList.remove('is-open');
+        });
+    });
+    syncSubagentExpandButtons(grid);
+    initUiHoverTips(grid);
+}
+`,R=`const contextStore = {
     tokensBySession: new Map(),
     todoBySession: new Map(),
     progressBySession: new Map(),
@@ -1767,7 +1916,7 @@ function appendContextProgressForSession(sessionId, kind, delta) {
 function selectContextProgress(sessionId) {
     return contextStore.progressBySession.get(String(sessionId || '')) || null;
 }
-`,R=`function markUiEventStoreApplied(event) {
+`,F=`function markUiEventStoreApplied(event) {
     if (!event || typeof event !== 'object') return;
     try {
         Object.defineProperty(event, '__storeApplied', {
@@ -1840,7 +1989,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,F=`function formatTokenCompact(n) {
+`,M=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -3055,7 +3204,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,M=`function ensureUiHoverTooltipEl() {
+`,N=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -3450,7 +3599,7 @@ async function refreshTodoPlanPanel() {
         hideTodoPlanPanel();
     }
 }
-`,N=`function removeMessagesFromNode(startWrap) {
+`,O=`function removeMessagesFromNode(startWrap) {
     const stream = getVisibleChatStream() || chatContainer;
     if (!stream) return;
     const kids = Array.from(stream.children);
@@ -5968,7 +6117,7 @@ function finalizeProgressStreamForType(ctx, logType) {
 }
 
 /* ── Subagent 浮层 / 过程块 ── */
-`,O=`var subagentCardSyncTimer = null;
+`,D=`var subagentCardSyncTimer = null;
 var subagentPanelOpen = false;
 var subagentPanelBound = false;
 var subagentDockExpanded = false;
@@ -7367,156 +7516,6 @@ function bindSubagentFinalOnlyHistoryLoader(bodyEl, hostEl, agentId, hasOlder, r
     }, { passive: true });
 }
 
-async function toggleSubagentOutputPanel(card, sessionId) {
-    if (!card || !sessionId) return;
-    var agentId = card.getAttribute('data-agent-id') || '';
-    if (!agentId) return;
-    var panel = card.querySelector('.subagent-output-panel');
-    if (!panel) {
-        panel = document.createElement('div');
-        panel.className = 'subagent-output-panel';
-        var body = card.querySelector('.subagent-card-body');
-        if (body) card.insertBefore(panel, body);
-        else card.appendChild(panel);
-    }
-    var wasOpen = panel.classList.contains('is-open');
-    panel.classList.toggle('is-open', !wasOpen);
-    var btn = card.querySelector('.subagent-card-output');
-    if (btn) btn.classList.toggle('is-active', !wasOpen);
-    if (wasOpen || panel.dataset.loaded === '1' || panel.dataset.loading === '1') return;
-    panel.dataset.loading = '1';
-    panel.innerHTML = '<div class="subagent-output-empty">加载中...</div>';
-    try {
-        var resp = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(agentId) + '/output');
-        var data = await resp.json();
-        if (!resp.ok || !data || !data.ok) throw new Error((data && data.error) || ('HTTP ' + resp.status));
-        var content = String(data.content || '').trim();
-        panel.innerHTML = content
-            ? '<div class="subagent-output-content markdown-body">' + renderMarkdown(content) + '</div>'
-            : '<div class="subagent-output-empty">(无输出)</div>';
-        enhanceAssistantMessageContent(panel);
-        panel.dataset.loaded = '1';
-    } catch (e) {
-        panel.innerHTML = '<div class="subagent-output-empty">加载失败: ' + escapeHtml(String(e)) + '</div>';
-    } finally {
-        delete panel.dataset.loading;
-    }
-}
-
-function bindSubagentGridActions(grid, sessionId) {
-    if (!grid) return;
-    grid.querySelectorAll('.subagent-grid-card').forEach(function (card) {
-        bindProcessAggregate(card);
-    });
-    grid.querySelectorAll('.subagent-card-stop').forEach(function (btn) {
-        if (btn.dataset.subagentStopBound) return;
-        btn.dataset.subagentStopBound = '1';
-        btn.addEventListener('click', async function (e) {
-            e.stopPropagation();
-            var aid = btn.getAttribute('data-agent-id');
-            if (!aid || !sessionId) return;
-            try {
-                await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(aid) + '/interrupt', { method: 'POST' });
-            } catch (err) { /* ignore */ }
-            var menu = btn.closest('.subagent-card-menu');
-            if (menu) menu.classList.remove('is-open');
-            scheduleRefreshSubagentTreePanel(sessionId);
-        });
-    });
-    grid.querySelectorAll('.subagent-card-delete').forEach(function (btn) {
-        if (btn.dataset.subagentDeleteBound) return;
-        btn.dataset.subagentDeleteBound = '1';
-        btn.addEventListener('click', async function (e) {
-            e.stopPropagation();
-            var aid = btn.getAttribute('data-agent-id');
-            if (!aid || !sessionId) return;
-            var ok = await openUiModal({
-                title: '删除 Subagent',
-                subtitle: aid.slice(0, 8) + '…',
-                message: '将删除该 subagent 的会话记录、过程卡片及其嵌套子任务。该操作不可撤销。',
-                danger: true,
-                confirmText: '删除',
-                cancelText: '取消',
-            });
-            if (!ok) return;
-            var menu = btn.closest('.subagent-card-menu');
-            if (menu) menu.classList.remove('is-open');
-            btn.disabled = true;
-            try {
-                var resp = await fetch('/sessions/' + encodeURIComponent(sessionId) + '/subagents/' + encodeURIComponent(aid), { method: 'DELETE' });
-                if (!resp.ok) {
-                    showUiAlert({ title: '删除失败', message: '无法删除该 Subagent，请稍后重试。', variant: 'error' });
-                    btn.disabled = false;
-                    return;
-                }
-                forgetSubagentBodyCache(sessionId, aid);
-                subagentStore.remove(sessionId, aid);
-                delete subagentCardLoadQueued[aid];
-                var card = btn.closest('.subagent-grid-card');
-                if (card) card.remove();
-                scheduleRefreshSubagentTreePanel(sessionId, 0);
-            } catch (err) {
-                btn.disabled = false;
-                showUiAlert({ title: '删除失败', message: String((err && err.message) || err || 'unknown error'), variant: 'error' });
-            }
-        });
-    });
-    grid.querySelectorAll('.subagent-card-menu-btn').forEach(function (btn) {
-        if (btn.dataset.subagentMenuBound) return;
-        btn.dataset.subagentMenuBound = '1';
-        btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var menu = btn.closest('.subagent-card-menu');
-            if (!menu) return;
-            var open = !menu.classList.contains('is-open');
-            grid.querySelectorAll('.subagent-card-menu.is-open').forEach(function (m) {
-                if (m !== menu) {
-                    m.classList.remove('is-open');
-                    var b = m.querySelector('.subagent-card-menu-btn');
-                    if (b) b.setAttribute('aria-expanded', 'false');
-                }
-            });
-            menu.classList.toggle('is-open', open);
-            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-        });
-    });
-    grid.querySelectorAll('.subagent-card-expand').forEach(function (btn) {
-        if (btn.dataset.subagentExpandBound) return;
-        btn.dataset.subagentExpandBound = '1';
-        btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var card = btn.closest('.subagent-grid-card');
-            if (card) toggleSubagentCardExpanded(card);
-        });
-    });
-    grid.querySelectorAll('.subagent-card-body').forEach(function (body) {
-        if (body.dataset.subagentBodyExpandBound) return;
-        body.dataset.subagentBodyExpandBound = '1';
-        body.addEventListener('click', function (e) {
-            var card = body.closest('.subagent-grid-card');
-            if (!card || card.classList.contains('is-expanded')) return;
-            var target = e.target;
-            if (target && target.closest && target.closest('button,a,input,textarea,select,.feed-chunk-scroller,.copy-btn,.subagent-card-menu,.msg-wrap--user')) return;
-            var sel = window.getSelection && window.getSelection();
-            if (sel && String(sel).trim()) return;
-            setSubagentCardExpanded(card, true);
-        });
-    });
-    grid.querySelectorAll('.subagent-card-output').forEach(function (btn) {
-        if (btn.dataset.subagentOutputBound) return;
-        btn.dataset.subagentOutputBound = '1';
-        btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            var card = btn.closest('.subagent-grid-card');
-            if (card) toggleSubagentOutputPanel(card, sessionId);
-            var menu = btn.closest('.subagent-card-menu');
-            if (menu) menu.classList.remove('is-open');
-        });
-    });
-    syncSubagentExpandButtons(grid);
-    initUiHoverTips(grid);
-}
-
 async function refreshSubagentContextForCard(card, agentId, force) {
     if (!card || !agentId) return;
     if (!force && !subagentPanelOpen) return;
@@ -7746,7 +7745,7 @@ function updateSubagentBlockFinish(ctx, event) {
     applySubagentBlockFinish(blk, event);
     handleSubagentLifecycleEvent(event);
 }
-`,D=`function renderEvent(ctx, event, eventIndex, runSessionId) {
+`,H=`function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
     if (eventSessionId && !event.__storeApplied) {
@@ -7836,7 +7835,7 @@ function updateSubagentBlockFinish(ctx, event) {
         if (fallbackContent.trim()) appendLog(ctx, fallbackContent, 'log-entry', runSessionId);
     }
 }
-`,H=`function setSendButtonState() {
+`,q=`function setSendButtonState() {
     sendBtn.disabled = false;
     if (isSessionRunning(currentSessionId)) {
         sendBtn.innerHTML = '停止 <span class="loader" aria-hidden="true"></span>';
@@ -8811,7 +8810,7 @@ async function createNewSessionInner() {
         appendLogVisible('创建新会话失败', 'error-log');
     }
 }
-`,q=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
+`,U=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) return streamEventIdx;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9359,7 +9358,7 @@ sendBtn.addEventListener('click', function () {
     });
 })();
 initUiHoverTips(document);
-`,U=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
+`,j=`newSessionBtn.addEventListener('click', async () => { await createNewSession(); });
 
 function initSidebarSash() {
     const side = document.getElementById('sidebar');
@@ -9602,8 +9601,8 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,j=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U];Function(`"use strict";
-`+j.join(`
+`,W=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U,j];Function(`"use strict";
+`+W.join(`
 
 `)+`
 //# sourceURL=myagent-ui.js`)();typeof initUiHoverTips=="function"&&initUiHoverTips(document);
