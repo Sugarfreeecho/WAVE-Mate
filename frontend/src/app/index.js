@@ -7,8 +7,12 @@ import sessionRenderersSource from './state/session-renderers.js?raw';
 import messageStoreSource from './state/message-store.js?raw';
 import messageRenderersSource from './state/message-renderers.js?raw';
 import subagentStoreSource from './state/subagent-store.js?raw';
+import subagentContinueSource from './state/subagent-continue.js?raw';
+import subagentEventStateSource from './state/subagent-event-state.js?raw';
 import subagentRenderersSource from './state/subagent-renderers.js?raw';
 import subagentCacheSource from './state/subagent-cache.js?raw';
+import subagentLoaderSource from './state/subagent-loader.js?raw';
+import subagentSyncSource from './state/subagent-sync.js?raw';
 import subagentActionsSource from './state/subagent-actions.js?raw';
 import subagentDockSource from './state/subagent-dock.js?raw';
 import contextStoreSource from './state/context-store.js?raw';
@@ -32,8 +36,12 @@ const uiSources = [
     messageStoreSource,
     messageRenderersSource,
     subagentStoreSource,
+    subagentContinueSource,
+    subagentEventStateSource,
     subagentRenderersSource,
     subagentCacheSource,
+    subagentLoaderSource,
+    subagentSyncSource,
     subagentActionsSource,
     subagentDockSource,
     contextStoreSource,
