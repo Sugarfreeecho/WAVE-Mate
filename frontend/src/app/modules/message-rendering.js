@@ -650,7 +650,12 @@ function applyProcessMetricsFromEvent(ctx, event) {
     }
     if (!agg) return;
     if (event.duration_ms != null && Number.isFinite(Number(event.duration_ms))) {
-        agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
+        if (!replayingMessages && agg.dataset.procStartedAt) {
+            agg.dataset.procEndedAt = String(procNow());
+            delete agg.dataset.procDurationMs;
+        } else {
+            agg.dataset.procDurationMs = String(Math.max(0, Math.round(Number(event.duration_ms))));
+        }
     }
     if (event.react_loops != null && Number.isFinite(Number(event.react_loops))) {
         agg.dataset.procReactLoops = String(Math.max(0, Math.floor(Number(event.react_loops))));
@@ -2264,14 +2269,13 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
     var rawStr = content == null ? '' : String(content);
     messageRawMarkdown.set(wrap, rawStr);
     if (role === 'user') {
-        var lineCount = rawStr.split('\n').length;
-        if (lineCount > 10) {
+        if (userMessageShouldCollapse(rawStr)) {
             wrap.classList.add('has-turn-process');
             div.classList.add('is-collapsible');
             // 摘要
             var sum = document.createElement('div');
             sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\n').slice(0, 10).join('\n') + '\n...';
+            sum.textContent = buildUserMessageSummary(rawStr);
             linkifyAssistantTextNodes(sum);
             // 完整
             var ful = document.createElement('div');
@@ -2301,6 +2305,9 @@ function appendMessage(ctx, role, content, meta, runSessionId) {
         enhanceAssistantMessageContent(div);
     }
     wrap.appendChild(div);
+    if (role === 'user' && !div.classList.contains('is-collapsible')) {
+        renderUserMessageContent(wrap, div, rawStr, linkifyAssistantTextNodes);
+    }
     attachMessageToolbar(wrap, role);
     (ctx.stream || chatContainer).appendChild(wrap);
     if (role === 'assistant') {

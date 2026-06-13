@@ -1790,6 +1790,28 @@ def _human_file_size(num: int) -> str:
     return f"{num / 1024**3:.1f} GiB"
 
 
+_READ_FILE_VIRTUAL_LINE_CHARS = 1000
+
+
+def _virtualize_text_lines(lines: List[str], max_chars: int = _READ_FILE_VIRTUAL_LINE_CHARS) -> List[str]:
+    virtual: List[str] = []
+    limit = max(1, int(max_chars or _READ_FILE_VIRTUAL_LINE_CHARS))
+    for line in lines:
+        has_newline = line.endswith("\n")
+        body = line[:-1] if has_newline else line
+        if body == "":
+            virtual.append("\n" if has_newline else "")
+            continue
+        for i in range(0, len(body), limit):
+            chunk = body[i : i + limit]
+            if i + limit < len(body):
+                chunk += "\n"
+            elif has_newline:
+                chunk += "\n"
+            virtual.append(chunk)
+    return virtual
+
+
 def read_file(
     path: Optional[str] = None,
     target_directory: Optional[str] = None,
@@ -1840,6 +1862,7 @@ def read_file(
             lines = f.readlines()
     except Exception as e:
         return f"Failed to read file: {e}"
+    lines = _virtualize_text_lines(lines)
     n = len(lines)
     s = max(1, int(start_line))
     e = min(n, int(end_line))
@@ -1890,11 +1913,12 @@ def _line_count_file(p: Path) -> str:
         return "?"
     if st.st_size == 0:
         return "0"
-    n = 0
     try:
-        with open(p, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                n += chunk.count(b"\n")
+        n = 0
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                body = line[:-1] if line.endswith("\n") else line
+                n += max(1, (len(body) + _READ_FILE_VIRTUAL_LINE_CHARS - 1) // _READ_FILE_VIRTUAL_LINE_CHARS)
     except (OSError, PermissionError, ValueError):
         return "?"
     return str(n)

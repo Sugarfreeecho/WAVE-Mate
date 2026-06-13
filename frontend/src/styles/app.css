@@ -326,7 +326,24 @@ body {
     border: 1px solid transparent;
     transition: all 0.18s var(--ease-out-expo); position: relative;
 }
-.session-item-head { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; width: 100%; min-width: 0; }
+.session-item::after {
+    content: '';
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: 2.7rem; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    pointer-events: none; z-index: 2;
+    opacity: 0;
+    background: linear-gradient(to left, rgba(18, 18, 28, 0.92), rgba(18, 18, 28, 0));
+    transition: opacity 0.16s var(--ease-out-expo);
+}
+.session-item:hover::after,
+.session-item:focus-within::after,
+.session-item:has(.session-more-wrap.is-open)::after {
+    opacity: 1;
+}
+:root.theme-light .session-item::after {
+    background: linear-gradient(to left, rgba(246, 247, 251, 0.96), rgba(246, 247, 251, 0));
+}
+.session-item-head { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; width: 100%; min-width: 0; position: relative; }
 .session-last-query {
     font-size: 0.62rem; line-height: 1.4; color: #7f8699;
     font-family: var(--sans); word-break: break-word;
@@ -369,7 +386,7 @@ body {
 }
 
 .session-name {
-    flex: 1; min-width: 0; font-size: 0.82rem;
+    flex: 1; min-width: 0; font-size: 0.82rem; line-height: 1.35;
     color: var(--text-secondary);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 2px 4px; border-radius: 4px;
@@ -387,20 +404,24 @@ body {
     content: ''; display: inline-block; width: 6px; height: 6px;
     border-radius: 50%; background: var(--amber-accent);
     margin-right: 5px; box-shadow: 0 0 8px rgba(249,226,175,0.5);
-    vertical-align: middle; animation: pulse-dot 1.4s ease-in-out infinite;
+    vertical-align: 0.08em; animation: pulse-dot 1.4s ease-in-out infinite;
 }
 .session-item.is-unread-result .session-name::before {
     content: ''; display: inline-block; width: 6px; height: 6px;
     border-radius: 50%; background: var(--green-accent);
     margin-right: 5px; box-shadow: 0 0 8px rgba(166,227,161,0.4);
-    vertical-align: middle;
+    vertical-align: 0.08em;
 }
 @keyframes pulse-dot {
     0%,100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.45; transform: scale(0.8); }
 }
 
-.session-more-wrap { position: relative; flex-shrink: 0; align-self: center; display: flex; align-items: center; }
+.session-more-wrap {
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    z-index: 4; display: flex; align-items: center;
+    pointer-events: none;
+}
 .session-more-btn {
     background: none; border: none; color: var(--text-tertiary);
     cursor: pointer; padding: 0; width: 26px; height: 26px;
@@ -408,6 +429,7 @@ body {
     opacity: 0; transition: opacity 0.18s, background 0.18s, color 0.18s;
     font-family: var(--sans);
     display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+    pointer-events: auto;
 }
 .session-more-btn .session-more-dots,
 .subagent-card-menu-btn .session-more-dots {
@@ -441,6 +463,7 @@ body {
     z-index: 90; visibility: hidden; opacity: 0;
     transform: translateY(-5px);
     transition: opacity 0.16s var(--ease-out-expo), transform 0.16s var(--ease-out-expo), visibility 0.16s;
+    pointer-events: auto;
 }
 .session-more-wrap.is-open .session-more-menu { visibility: visible; opacity: 1; transform: translateY(0); }
 .session-more-menu button {
@@ -475,7 +498,7 @@ body {
 }
 .main-center {
     position: relative; width: 100%; min-width: 0; max-width: 100%;
-    margin: 0; padding: 0 0.5rem 0 0; flex: 1; min-height: 0;
+    margin: 0; padding: 0; flex: 1; min-height: 0;
     display: flex; flex-direction: column;
     container-type: inline-size; container-name: main;
 }
@@ -953,7 +976,6 @@ body {
     margin: 0.5em 0; overflow-x: auto; overflow-y: visible;
     -webkit-overflow-scrolling: touch;
     border: none; border-radius: 0;
-    scrollbar-gutter: stable;
 }
 .message table {
     border-collapse: collapse; width: 100%; max-width: 100%;
@@ -1970,6 +1992,118 @@ body {
 }
 
 /* ── Toast ── */
+* {
+    scrollbar-width: none;
+    scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.16) transparent;
+}
+::-webkit-scrollbar { width: 0; height: 0; }
+*:hover::-webkit-scrollbar,
+*:focus-within::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.14);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.24); }
+:root.theme-light *:hover,
+:root.theme-light *:focus-within {
+    scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+}
+:root.theme-light ::-webkit-scrollbar-thumb {
+    background-color: rgba(15, 23, 42, 0.18);
+    border-radius: 999px;
+}
+:root.theme-light ::-webkit-scrollbar-thumb:hover,
+:root.theme-light ::-webkit-scrollbar-thumb:active {
+    background-color: rgba(15, 23, 42, 0.30);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+    scrollbar-color: rgba(255,255,255,0.16) transparent;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+    background-color: rgba(255,255,255,0.16);
+}
+*:hover::-webkit-scrollbar-thumb:hover,
+*:focus-within::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255,255,255,0.26);
+}
+:root.theme-light * {
+    scrollbar-color: transparent transparent;
+}
+:root.theme-light *:hover,
+:root.theme-light *:focus-within {
+    scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+}
+:root.theme-light ::-webkit-scrollbar-thumb {
+    background-color: transparent;
+}
+:root.theme-light *:hover::-webkit-scrollbar-thumb,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb {
+    background-color: rgba(15, 23, 42, 0.20);
+}
+:root.theme-light *:hover::-webkit-scrollbar-thumb:hover,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(15, 23, 42, 0.32);
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+*:hover,
+*:focus-within {
+    scrollbar-color: rgba(255,255,255,0.13) transparent;
+}
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border: 0;
+    border-radius: 999px;
+    background-clip: padding-box;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb:hover,
+*:focus-within::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255,255,255,0.13);
+}
+:root.theme-light * {
+    scrollbar-color: transparent transparent;
+}
+:root.theme-light *:hover,
+:root.theme-light *:focus-within {
+    scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
+}
+:root.theme-light ::-webkit-scrollbar-thumb {
+    background-color: transparent;
+}
+:root.theme-light *:hover::-webkit-scrollbar-thumb,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb,
+:root.theme-light *:hover::-webkit-scrollbar-thumb:hover,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(15, 23, 42, 0.18);
+}
+
 .toast-host { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 200; pointer-events: none; }
 .copy-toast {
     position: absolute; bottom: 5.5rem; left: 50%; transform: translateX(-50%);
@@ -2219,7 +2353,7 @@ body {
 .settings-advanced-btn:hover { border-color: rgba(203,166,247,0.55); background: rgba(203,166,247,0.18); }
 
 /* ═══════════════ 响应式 ═══════════════ */
-@media (max-width: 900px) { .main-center { padding: 0 0.3rem 0 0; } }
+@media (max-width: 900px) { .main-center { padding: 0; } }
 @media (max-width: 720px) {
     .sidebar { min-width: 100px; max-width: min(480px, 60vw); }
     .chat-stage {

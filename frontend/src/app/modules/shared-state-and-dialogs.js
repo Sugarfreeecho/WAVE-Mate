@@ -57,8 +57,86 @@ let streamScrollFollowRaf = 0;
 let subagentScrollFollowRaf = 0;
 var subagentCardNearBottom = Object.create(null);
 const SUBAGENT_CARD_NEAR_BOTTOM_PX = 48;
+const USER_MESSAGE_COLLAPSE_LINES = 10;
+const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
+
+function splitUserMessageVisualLines(text) {
+    var raw = text == null ? '' : String(text);
+    var physical = raw.split('\n');
+    var out = [];
+    for (var i = 0; i < physical.length; i += 1) {
+        var line = physical[i];
+        if (line.length === 0) {
+            out.push('');
+            continue;
+        }
+        for (var j = 0; j < line.length; j += USER_MESSAGE_VIRTUAL_LINE_CHARS) {
+            out.push(line.slice(j, j + USER_MESSAGE_VIRTUAL_LINE_CHARS));
+        }
+    }
+    return out;
+}
+
+function buildUserMessageSummary(text) {
+    var lines = splitUserMessageVisualLines(text);
+    return lines.slice(0, USER_MESSAGE_COLLAPSE_LINES).join('\n') + '\n...';
+}
+
+function userMessageShouldCollapse(text) {
+    return false;
+}
+
+function renderUserMessageContent(wrap, div, rawStr, linkifier) {
+    var applyLinks = typeof linkifier === 'function' ? linkifier : null;
+
+    function setPlain() {
+        div.textContent = rawStr;
+        if (applyLinks) applyLinks(div);
+    }
+
+    function setCollapsed() {
+        if (div.classList.contains('is-collapsible')) return;
+        wrap.classList.add('has-turn-process');
+        div.classList.add('is-collapsible');
+        div.textContent = '';
+        var sum = document.createElement('div');
+        sum.className = 'user-msg-summary';
+        sum.textContent = buildUserMessageSummary(rawStr);
+        if (applyLinks) applyLinks(sum);
+        var ful = document.createElement('div');
+        ful.className = 'user-msg-full';
+        ful.textContent = rawStr;
+        if (applyLinks) applyLinks(ful);
+        var ch = document.createElement('div');
+        ch.className = 'user-msg-chevron';
+        var arrow = document.createElement('span');
+        arrow.className = 'chevron-arrow';
+        ch.appendChild(arrow);
+        ch.addEventListener('click', function(e) {
+            e.stopPropagation();
+            wrap.classList.toggle('user-msg-expanded');
+        });
+        div.appendChild(sum);
+        div.appendChild(ful);
+        div.appendChild(ch);
+    }
+
+    setPlain();
+    requestAnimationFrame(function () {
+        if (!div.isConnected || div.classList.contains('is-collapsible')) return;
+        var cs = window.getComputedStyle ? window.getComputedStyle(div) : null;
+        var lineHeight = cs ? parseFloat(cs.lineHeight) : NaN;
+        if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+            var fontSize = cs ? parseFloat(cs.fontSize) : NaN;
+            lineHeight = Number.isFinite(fontSize) && fontSize > 0 ? fontSize * 1.65 : 18;
+        }
+        if (div.scrollHeight > lineHeight * USER_MESSAGE_COLLAPSE_LINES + 1) {
+            setCollapsed();
+        }
+    });
+}
 
 function closeUiModal(result) {
     var root = document.getElementById('ui-modal-root');

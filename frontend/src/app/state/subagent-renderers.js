@@ -270,31 +270,7 @@ function createSubagentMiniMessage(role, content, eventIndex) {
     div.className = 'message ' + (role === 'user' ? 'user' : 'assistant');
     var rawStr = content == null ? '' : String(content);
     if (role === 'user') {
-        var lineCount = rawStr.split('\n').length;
-        if (lineCount > 10) {
-            wrap.classList.add('has-turn-process');
-            div.classList.add('is-collapsible');
-            var sum = document.createElement('div');
-            sum.className = 'user-msg-summary';
-            sum.textContent = rawStr.split('\n').slice(0, 10).join('\n') + '\n...';
-            var ful = document.createElement('div');
-            ful.className = 'user-msg-full';
-            ful.textContent = rawStr;
-            var ch = document.createElement('div');
-            ch.className = 'user-msg-chevron';
-            var arrow = document.createElement('span');
-            arrow.className = 'chevron-arrow';
-            ch.appendChild(arrow);
-            ch.addEventListener('click', function(e) {
-                e.stopPropagation();
-                wrap.classList.toggle('user-msg-expanded');
-            });
-            div.appendChild(sum);
-            div.appendChild(ful);
-            div.appendChild(ch);
-        } else {
-            div.textContent = rawStr;
-        }
+        renderUserMessageContent(wrap, div, rawStr);
     }
     else {
         div.innerHTML = renderMarkdown(rawStr);

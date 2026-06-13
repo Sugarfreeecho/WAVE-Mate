@@ -222,6 +222,34 @@ tools_dict = {k: v for k, v in tools.items()}
 # 只读工具允许并发；存在副作用的工具默认串行执行。
 # activate_skill 仅读取 SKILL.md/目录列表，不修改工作区，可并行。
 READ_ONLY_TOOLS = {"read_file", "ls", "list_dir", "glob", "grep", "web_search", "web_fetch", "activate_skill"}
+READ_ONLY_TOOL_VIRTUAL_LINE_CHARS = 1000
+
+
+def _wrap_read_only_tool_output_lines(text: Any, max_chars: int = READ_ONLY_TOOL_VIRTUAL_LINE_CHARS) -> str:
+    raw = redact_sensitive_tool_text(text)
+    limit = max(1, int(max_chars or READ_ONLY_TOOL_VIRTUAL_LINE_CHARS))
+    out: List[str] = []
+    for line in raw.splitlines(keepends=True):
+        newline = ""
+        if line.endswith("\r\n"):
+            body = line[:-2]
+            newline = "\r\n"
+        elif line.endswith("\n") or line.endswith("\r"):
+            body = line[:-1]
+            newline = line[-1]
+        else:
+            body = line
+        if body == "":
+            out.append(line)
+            continue
+        for i in range(0, len(body), limit):
+            chunk = body[i : i + limit]
+            if i + limit < len(body):
+                chunk += "\n"
+            else:
+                chunk += newline
+            out.append(chunk)
+    return "".join(out) if out else raw
 
 
 def compute_context_tokens_for_session(session_id: str) -> Dict[str, Any]:
@@ -1739,7 +1767,10 @@ async def react_node(state: State, emit: Optional[Callable[[Dict[str, Any]], Any
                             clear_run_shell_interrupt_check()
 
                     # 截断结果（三路文本生成：日志用、LLM上下文用、UI用）
-                    result_str = redact_sensitive_tool_text(result)
+                    if tool_name in READ_ONLY_TOOLS:
+                        result_str = _wrap_read_only_tool_output_lines(result)
+                    else:
+                        result_str = redact_sensitive_tool_text(result)
                     
                     # 1. 日志用（首尾保留LOG_TRUNCATE_KEEP_CHARS）
                     result_for_log = truncate_head_tail(result_str, LOG_TRUNCATE_KEEP_CHARS)
@@ -2138,7 +2169,10 @@ def finish(state: State) -> State:
         if first_user:
             try:
                 title_template = load_prompt_template("title_generator")
-                title_prompt = title_template.format(first_user=first_user)
+                title_prompt = title_template.format(
+                    first_user=first_user,
+                    final_response=state.get("final_response") or "",
+                )
                 title, title_usage = executor_text_and_usage(title_prompt)
                 title = title.strip()[:20] if title else ""
                 if not title:

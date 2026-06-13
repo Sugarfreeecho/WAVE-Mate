@@ -675,15 +675,14 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
             range_end: events.length,
         });
         if (!opts.full && pageMeta) {
-            sessionHistoryPaging = {
+            setSessionHistoryPaging({
                 sessionId: sessionId,
                 total: pageMeta.total,
                 range_start: pageMeta.range_start,
                 range_end: pageMeta.range_end,
                 has_older: !!pageMeta.has_older,
-            };
+            });
             ensureHistorySentinel(getVisibleChatStream());
-            updateHistorySentinelVisibility();
         }
         if (events.length === 0) {
             suppressTocDuringSessionLoad = false;

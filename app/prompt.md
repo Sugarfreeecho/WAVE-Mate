@@ -103,8 +103,11 @@ B. 要点持久化（写入 `<summary>`）
 </key_context>
 
 ## title_generator
-<content>
+<user>
 {first_user}
-</content>
+</user>
+<final>
+{final_response}
+</final>
 
-请根据上述`content`内容生成一个简短而有区分度的**标题**（不超过15个字）。
+请根据上述`user`和`final`内容生成一个简短而有区分度的**标题**（不超过15个字）。

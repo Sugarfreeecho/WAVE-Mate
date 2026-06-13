@@ -559,6 +559,45 @@ function emptyChatStreamKeepingStrip(streamEl) {
     });
 }
 
+function persistHistoryPagingToStream(streamEl, paging) {
+    if (!streamEl) return;
+    if (!paging || paging.sessionId !== currentSessionId) {
+        delete streamEl.dataset.historyPaging;
+        return;
+    }
+    streamEl.dataset.historyPaging = JSON.stringify({
+        sessionId: paging.sessionId,
+        total: Number(paging.total) || 0,
+        range_start: Number(paging.range_start) || 0,
+        range_end: Number(paging.range_end) || 0,
+        has_older: !!paging.has_older,
+    });
+}
+
+function restoreHistoryPagingFromStream(streamEl) {
+    if (!streamEl || !streamEl.dataset.historyPaging) return null;
+    try {
+        var raw = JSON.parse(streamEl.dataset.historyPaging);
+        if (!raw || raw.sessionId !== currentSessionId) return null;
+        return {
+            sessionId: raw.sessionId,
+            total: Number(raw.total) || 0,
+            range_start: Number(raw.range_start) || 0,
+            range_end: Number(raw.range_end) || 0,
+            has_older: !!raw.has_older,
+        };
+    } catch (_e) {
+        delete streamEl.dataset.historyPaging;
+        return null;
+    }
+}
+
+function setSessionHistoryPaging(paging) {
+    sessionHistoryPaging = paging || null;
+    persistHistoryPagingToStream(getVisibleChatStream(), sessionHistoryPaging);
+    updateHistorySentinelVisibility();
+}
+
 function ensureHistorySentinel(streamEl) {
     if (!streamEl) return null;
     var el = streamEl.querySelector('#history-load-sentinel');
@@ -607,7 +646,7 @@ function updateHistorySentinelVisibility() {
 }
 
 function resetSessionHistoryPaging() {
-    sessionHistoryPaging = null;
+    setSessionHistoryPaging(null);
     historyOlderLoading = false;
     updateHistorySentinelVisibility();
 }
@@ -615,13 +654,17 @@ function resetSessionHistoryPaging() {
 async function loadOlderHistoryChunk(opts) {
     opts = opts || {};
     var sid = currentSessionId;
+    var stream = getVisibleChatStream();
     var ph = sessionHistoryPaging;
+    if ((!ph || ph.sessionId !== sid) && stream) {
+        ph = restoreHistoryPagingFromStream(stream);
+        if (ph) sessionHistoryPaging = ph;
+    }
     if (!sid || !ph || ph.sessionId !== sid || !ph.has_older || historyOlderLoading) return;
     historyOlderLoading = true;
     var prevReplaying = replayingMessages;
     replayingMessages = true;
     updateHistorySentinelVisibility();
-    var stream = getVisibleChatStream();
     var cc = chatContainer;
     var prevScrollTop = cc ? cc.scrollTop : 0;
     var anchor = getHistoryScrollAnchor(cc);
@@ -633,7 +676,7 @@ async function loadOlderHistoryChunk(opts) {
         if (!response.ok || !data || typeof data !== 'object') return;
         var events = data.events;
         if (!Array.isArray(events) || events.length === 0) {
-            sessionHistoryPaging = Object.assign({}, ph, { has_older: !!data.has_older });
+            setSessionHistoryPaging(Object.assign({}, ph, { has_older: !!data.has_older }));
             return;
         }
         ensureHistorySentinel(stream);
@@ -656,13 +699,13 @@ async function loadOlderHistoryChunk(opts) {
             stream.insertBefore(frag, sen ? sen.nextSibling : stream.firstChild);
         }
         loadedOlder = true;
-        sessionHistoryPaging = {
+        setSessionHistoryPaging({
             sessionId: sid,
             total: typeof data.total === 'number' ? data.total : ph.total,
             range_start: typeof data.range_start === 'number' ? data.range_start : ph.range_start,
             range_end: ph.range_end,
             has_older: !!data.has_older,
-        };
+        });
     } catch (e) {
         console.error('加载更早消息失败:', e);
     } finally {
@@ -720,6 +763,9 @@ function restoreStreamForRunningSession(enteringId) {
     st.id = 'chat-stream';
     st.setAttribute('aria-label', '消息');
     chatContainer.appendChild(st);
+    var restoredPaging = restoreHistoryPagingFromStream(st);
+    if (restoredPaging) sessionHistoryPaging = restoredPaging;
+    updateHistorySentinelVisibility();
     bindExistingLogs(st);
     return true;
 }

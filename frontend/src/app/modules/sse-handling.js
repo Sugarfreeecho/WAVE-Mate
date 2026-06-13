@@ -347,6 +347,7 @@ async function sendMessage() {
     hideRewriteUndoToast();
 
     hideSubagentContinueBanner();
+    const userSentAt = new Date().toISOString();
 
     let submitSessionId = submitSessionIdInitial;
     if (!submitSessionId) {
@@ -381,7 +382,7 @@ async function sendMessage() {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
     }
-    runCtx.runStartedAt = new Date().toISOString();
+    runCtx.runStartedAt = userSentAt;
     runCtx.lastUserEventIndex = preCount;
     resetLlmState(runCtx);
     finalizeLlmStreamChunks(runCtx);
