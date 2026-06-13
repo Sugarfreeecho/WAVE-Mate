@@ -1,5 +1,9 @@
 async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
-    if (!response || !response.body) return streamEventIdx;
+    if (!response || !response.body) throw new Error('stream response missing body');
+    var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
+    if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
+        throw new Error('stream response failed: ' + (response.status || 'no status'));
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -263,12 +267,12 @@ async function attachSessionEventStream(sessionId, opts) {
         streamProcNearBottom = true;
         const preCount = await getUiEventCount(runSessionId);
         const response = await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/stream', { signal: ac.signal });
-        var ct = (response.headers.get('content-type') || '').toLowerCase();
-        if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
         console.error('reattach stream failed:', error);
+        const msg = (error && error.message) ? String(error.message) : String(error);
+        if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);
     } finally {
         if (runCtx) {
             finalizeLlmStreamChunks(runCtx);
@@ -280,6 +284,7 @@ async function attachSessionEventStream(sessionId, opts) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
     }
@@ -521,8 +526,11 @@ sendBtn.addEventListener('click', function () {
                 if (!r.ok) { alert('撤销失败，请重试。'); return; }
                 if (s.data.sessionId === currentSessionId) {
                     showLoading();
-                    await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });
-                    hideLoading();
+                    try {
+                        await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });
+                    } finally {
+                        hideLoading();
+                    }
                 }
             } catch (err) { console.error(err); alert('撤销失败，请重试。'); return; }
         }

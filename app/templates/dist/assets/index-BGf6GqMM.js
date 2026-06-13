@@ -8333,7 +8333,7 @@ const uiEventCountCache = {
 async function fetchSessionsStateSnapshot(opts) {
     opts = opts || {};
     const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url, {}, 12000);
     if (!response.ok) throw new Error('sessions state failed: ' + response.status);
     const snapshot = await response.json();
     if (!snapshot || !Array.isArray(snapshot.sessions)) {
@@ -8343,11 +8343,25 @@ async function fetchSessionsStateSnapshot(opts) {
     return snapshot;
 }
 
+async function fetchWithTimeout(url, options, timeoutMs) {
+    options = options || {};
+    const ms = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
+    if (options.signal) return fetch(url, options);
+    const controller = new AbortController();
+    const timer = setTimeout(function () { controller.abort(); }, ms);
+    const nextOptions = Object.assign({}, options, { signal: controller.signal });
+    try {
+        return await fetch(url, nextOptions);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function loadArchivedSessions(opts) {
     opts = opts || {};
     const loadEpoch = ++archivedSessionsLoadEpoch;
     try {
-        const response = await fetch('/sessions?include_archived=true');
+        const response = await fetchWithTimeout('/sessions?include_archived=true', {}, 15000);
         const sessions = await response.json();
         if (loadEpoch !== archivedSessionsLoadEpoch) return;
         const all = Array.isArray(sessions) ? sessions : [];
@@ -8374,7 +8388,7 @@ async function loadSessions(opts) {
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
             console.error('加载会话状态快照失败，回退旧接口:', stateErr);
-            const response = await fetch('/sessions');
+            const response = await fetchWithTimeout('/sessions', {}, 12000);
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
                 const parsedArchivedCount = Number(archivedCountHeader);
@@ -8468,7 +8482,8 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
     try {
         let url = '/sessions/' + encodeURIComponent(sessionId) + '/messages';
         if (!opts.full) url += '?turns=' + HISTORY_DIALOGUES_PER_PAGE;
-        const response = await fetch(url);
+        const response = await fetchWithTimeout(url, {}, 15000);
+        if (!response.ok) throw new Error('messages failed: ' + response.status);
         const raw = await response.json();
         if (loadToken !== messageLoadEpoch || sessionId !== currentSessionId) return;
         document.getElementById('chat-loading')?.remove();
@@ -8614,9 +8629,19 @@ async function switchSession(sessionId) {
     showLoading();
     setTimeout(async () => {
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        await loadSessionMessages(sessionId, undefined, { preloadOlderIfShort: isServerStreamActive(sessionId) });
+        try {
+            await loadSessionMessages(sessionId, undefined, { preloadOlderIfShort: isServerStreamActive(sessionId) });
+        } catch (error) {
+            console.error('切换会话加载失败:', error);
+        } finally {
+            if (switchToken === switchSessionEpoch && sessionId === currentSessionId) {
+                hideLoading();
+                sessionStore.ui.loadingMessages = false;
+                suppressTocDuringSessionLoad = false;
+                replayingMessages = false;
+            }
+        }
         if (switchToken !== switchSessionEpoch || sessionId !== currentSessionId) return;
-        hideLoading();
         /* loadSessionMessages 内部已发起 rebuildToc()；这里再延后一帧调用 subagent panel
            保证「目录 → 消息 → 子 agent 按钮」的稳定顺序（无 subagent 的会话表现一致）。 */
         setTimeout(function () { refreshSubagentTreePanel(sessionId); }, 0);
@@ -8667,7 +8692,11 @@ async function createNewSessionInner() {
     }
 }
 `,z=`async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
-    if (!response || !response.body) return streamEventIdx;
+    if (!response || !response.body) throw new Error('stream response missing body');
+    var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
+    if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
+        throw new Error('stream response failed: ' + (response.status || 'no status'));
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -8931,12 +8960,12 @@ async function attachSessionEventStream(sessionId, opts) {
         streamProcNearBottom = true;
         const preCount = await getUiEventCount(runSessionId);
         const response = await fetch('/sessions/' + encodeURIComponent(runSessionId) + '/stream', { signal: ac.signal });
-        var ct = (response.headers.get('content-type') || '').toLowerCase();
-        if (!response.ok || !response.body || ct.indexOf('text/event-stream') < 0) return;
         await consumeAgentSseResponse(response, runCtx, runSessionId, preCount);
     } catch (error) {
         if (error && error.name === 'AbortError') return;
         console.error('reattach stream failed:', error);
+        const msg = (error && error.message) ? String(error.message) : String(error);
+        if (runCtx && runSessionId === currentSessionId) appendLog(runCtx, '恢复实时流失败: ' + msg, 'error-log', runSessionId);
     } finally {
         if (runCtx) {
             finalizeLlmStreamChunks(runCtx);
@@ -8948,6 +8977,7 @@ async function attachSessionEventStream(sessionId, opts) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
         void refreshSingleSessionRow(runSessionId);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         await refreshContextTokensFromServer(runSessionId);
         if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
     }
@@ -9189,8 +9219,11 @@ sendBtn.addEventListener('click', function () {
                 if (!r.ok) { alert('撤销失败，请重试。'); return; }
                 if (s.data.sessionId === currentSessionId) {
                     showLoading();
-                    await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });
-                    hideLoading();
+                    try {
+                        await loadSessionMessages(s.data.sessionId, 'bottom', { full: true });
+                    } finally {
+                        hideLoading();
+                    }
                 }
             } catch (err) { console.error(err); alert('撤销失败，请重试。'); return; }
         }
