@@ -367,6 +367,13 @@ async function sendMessage() {
     } catch (err) {
         console.error('获取事件计数失败:', err);
     }
+    const existingStreamForIndex = (submitSessionId === currentSessionId) ? getVisibleChatStream() : null;
+    if (existingStreamForIndex) {
+        existingStreamForIndex.querySelectorAll('.msg-wrap--user[data-event-index]').forEach(function (wrap) {
+            const n = Number(wrap.getAttribute('data-event-index'));
+            if (Number.isFinite(n)) preCount = Math.max(preCount, Math.floor(n) + 1);
+        });
+    }
     const runSessionId = submitSessionId;
 
     /* 用户在 createNewSession / getUiEventCount 期间切走：

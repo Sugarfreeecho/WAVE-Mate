@@ -2104,6 +2104,47 @@ body {
     background-color: rgba(15, 23, 42, 0.18);
 }
 
+* {
+    scrollbar-width: thin !important;
+    scrollbar-color: transparent transparent !important;
+}
+*:hover,
+*:focus-within {
+    scrollbar-color: rgba(255,255,255,0.12) transparent !important;
+}
+::-webkit-scrollbar {
+    width: 3px !important;
+    height: 3px !important;
+}
+::-webkit-scrollbar-thumb {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: 0 !important;
+    border-radius: 999px !important;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb:hover,
+*:focus-within::-webkit-scrollbar-thumb:hover,
+*:hover::-webkit-scrollbar-thumb:active,
+*:focus-within::-webkit-scrollbar-thumb:active {
+    background: rgba(255,255,255,0.12) !important;
+    background-color: rgba(255,255,255,0.12) !important;
+}
+:root.theme-light *:hover,
+:root.theme-light *:focus-within {
+    scrollbar-color: rgba(15, 23, 42, 0.16) transparent !important;
+}
+:root.theme-light *:hover::-webkit-scrollbar-thumb,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb,
+:root.theme-light *:hover::-webkit-scrollbar-thumb:hover,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb:hover,
+:root.theme-light *:hover::-webkit-scrollbar-thumb:active,
+:root.theme-light *:focus-within::-webkit-scrollbar-thumb:active {
+    background: rgba(15, 23, 42, 0.16) !important;
+    background-color: rgba(15, 23, 42, 0.16) !important;
+}
+
 .toast-host { position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 200; pointer-events: none; }
 .copy-toast {
     position: absolute; bottom: 5.5rem; left: 50%; transform: translateX(-50%);
