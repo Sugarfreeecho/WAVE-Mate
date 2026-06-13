@@ -34,6 +34,9 @@ const sessionStore = {
                 nextSession.run_active = false;
                 nextSession.run_started_at = null;
             }
+            if (nextSession.unread_result && typeof sessionUnreadComplete !== 'undefined') {
+                sessionUnreadComplete.add(sid);
+            }
             nextById.set(sid, nextSession);
             nextOrder.push(sid);
             nextStreamActive[sid] = !!nextSession.stream_active;

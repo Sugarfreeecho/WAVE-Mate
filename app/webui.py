@@ -852,6 +852,12 @@ async def pin_session(session_id: str, pinned: bool = Form(...)):
     return JSONResponse(content={"status": "ok"})
 
 
+@fastapi_app.post("/sessions/{session_id}/unread-result/clear")
+async def clear_session_unread_result(session_id: str):
+    session_manager.clear_session_unread_result(session_id)
+    return JSONResponse(content={"status": "ok"})
+
+
 @fastapi_app.post("/sessions/{session_id}/truncate")
 async def truncate_session_events(
     session_id: str,

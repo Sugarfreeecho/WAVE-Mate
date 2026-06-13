@@ -5,6 +5,7 @@ let sendPipelineLockSessionId = null;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
+const sessionUnreadClearInFlight = Object.create(null);
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
 const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
@@ -61,6 +62,27 @@ const USER_MESSAGE_COLLAPSE_LINES = 10;
 const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
+
+function clearSessionUnreadState(sessionId, opts) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    opts = opts || {};
+    sessionUnreadComplete.delete(sid);
+    persistSessionUnread();
+    if (typeof sessionStore !== 'undefined') {
+        var sess = sessionStore.get(sid);
+        if (sess) {
+            sess.unread_result = false;
+            delete sess.unread_result_at;
+        }
+    }
+    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;
+    sessionUnreadClearInFlight[sid] = true;
+    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })
+        .catch(function () { /* ignore */ })
+        .finally(function () { delete sessionUnreadClearInFlight[sid]; });
+}
 
 function splitUserMessageVisualLines(text) {
     var raw = text == null ? '' : String(text);

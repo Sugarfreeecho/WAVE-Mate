@@ -286,7 +286,10 @@ async function attachSessionEventStream(sessionId, opts) {
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         await refreshContextTokensFromServer(runSessionId);
-        if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
+        if (runSessionId === currentSessionId) {
+            clearSessionUnreadState(runSessionId);
+            updateSubagentContinueBanner(runSessionId);
+        }
     }
 }
 
@@ -451,6 +454,7 @@ async function sendMessage() {
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);
         } else {
+            clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {

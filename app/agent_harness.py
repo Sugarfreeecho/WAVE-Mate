@@ -1552,6 +1552,8 @@ class SessionManager:
                     "archived": archived,
                     "pinned": pinned,
                     "pinned_at": pinned_at if pinned else None,
+                    "unread_result": bool(meta.get("unread_result", False)),
+                    "unread_result_at": meta.get("unread_result_at"),
                     "last_user_preview": str(meta.get("last_user_preview") or ""),
                 }
         except FileNotFoundError:
@@ -2542,6 +2544,9 @@ class SessionManager:
                             break
                 if changed:
                     self._save_index()
+                self.clear_session_unread_result(session_id)
+            elif event_copy.get("type") == "final":
+                self.mark_session_unread_result(session_id)
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
@@ -3679,6 +3684,7 @@ class SessionManager:
         d = dict(base)
         d.setdefault("archived", False)
         d.setdefault("pinned", False)
+        d["unread_result"] = bool(d.get("unread_result", False))
         if d.get("pinned") and not d.get("pinned_at"):
             d["pinned_at"] = d.get("updated_at") or d.get("created_at")
         sid = d.get("id")
@@ -3822,6 +3828,53 @@ class SessionManager:
                 sess["updated_at"] = metadata["updated_at"]
                 break
         self._save_index()
+
+    def mark_session_unread_result(self, session_id: str) -> None:
+        sid = self._normalize_session_id(session_id)
+        meta_path = self._get_metadata_path(sid)
+        if not meta_path.exists():
+            return
+        now = datetime.now().isoformat()
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["unread_result"] = True
+            metadata["unread_result_at"] = now
+            self._save_metadata_unlocked(sid, metadata)
+        changed = False
+        with self._lock:
+            for sess in self.index:
+                if sess.get("id") == sid:
+                    sess["unread_result"] = True
+                    sess["unread_result_at"] = now
+                    changed = True
+                    break
+        if changed:
+            self._save_index()
+
+    def clear_session_unread_result(self, session_id: str) -> None:
+        sid = self._normalize_session_id(session_id)
+        meta_path = self._get_metadata_path(sid)
+        if not meta_path.exists():
+            return
+        with self._session_metadata_lock(sid):
+            metadata = self._load_metadata_unlocked(sid)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["unread_result"] = False
+            metadata.pop("unread_result_at", None)
+            self._save_metadata_unlocked(sid, metadata)
+        changed = False
+        with self._lock:
+            for sess in self.index:
+                if sess.get("id") == sid:
+                    sess["unread_result"] = False
+                    sess.pop("unread_result_at", None)
+                    changed = True
+                    break
+        if changed:
+            self._save_index()
 
     def request_interrupt(self, session_id: str):
         """请求中断指定会话当前执行。"""

@@ -161,6 +161,7 @@ let sendPipelineLockSessionId = null;
 /** 会话在后台跑完后未点开过：侧栏绿点，点开即清除（localStorage 持久化，刷新不丢） */
 const sessionUnreadComplete = new Set();
 const LS_SESSION_UNREAD = 'myagent-session-unread';
+const sessionUnreadClearInFlight = Object.create(null);
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
 const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
@@ -217,6 +218,27 @@ const USER_MESSAGE_COLLAPSE_LINES = 10;
 const USER_MESSAGE_VIRTUAL_LINE_CHARS = 100;
 
 var uiModalKeyHandler = null;
+
+function clearSessionUnreadState(sessionId, opts) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    opts = opts || {};
+    sessionUnreadComplete.delete(sid);
+    persistSessionUnread();
+    if (typeof sessionStore !== 'undefined') {
+        var sess = sessionStore.get(sid);
+        if (sess) {
+            sess.unread_result = false;
+            delete sess.unread_result_at;
+        }
+    }
+    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;
+    sessionUnreadClearInFlight[sid] = true;
+    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })
+        .catch(function () { /* ignore */ })
+        .finally(function () { delete sessionUnreadClearInFlight[sid]; });
+}
 
 function splitUserMessageVisualLines(text) {
     var raw = text == null ? '' : String(text);
@@ -430,6 +452,9 @@ function showUiAlert(opts) {
                 nextSession.stream_active = false;
                 nextSession.run_active = false;
                 nextSession.run_started_at = null;
+            }
+            if (nextSession.unread_result && typeof sessionUnreadComplete !== 'undefined') {
+                sessionUnreadComplete.add(sid);
             }
             nextById.set(sid, nextSession);
             nextOrder.push(sid);
@@ -2869,7 +2894,7 @@ function applySessionEvent(event, opts) {
     }
     return { handled: false, messageRecord: messageRecord };
 }
-`,q=`function formatTokenCompact(n) {
+`,U=`function formatTokenCompact(n) {
     if (n == null || !Number.isFinite(Number(n))) return '—';
     const x = Math.max(0, Math.round(Number(n)));
     if (x >= 1000000) return (x / 1000000).toFixed(1).replace(/\\.0$/, '') + 'M';
@@ -4135,7 +4160,7 @@ async function scrollToUserTurnOrLoadOlder(eventIndex) {
         });
     }
 }
-`,U=`function ensureUiHoverTooltipEl() {
+`,q=`function ensureUiHoverTooltipEl() {
     if (uiHoverTooltipEl) return uiHoverTooltipEl;
     uiHoverTooltipEl = document.getElementById('ui-hover-tooltip');
     if (!uiHoverTooltipEl) {
@@ -8044,7 +8069,10 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
-    } else if (sessionUnreadComplete.has(sessionId)) {
+    } else {
+        var sess = sessionStore.get(sessionId);
+        var hasUnreadResult = sessionUnreadComplete.has(sessionId) || !!(sess && sess.unread_result);
+        if (!hasUnreadResult) return;
         itemDiv.classList.add('is-unread-result');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '有新回复，点击查看');
     }
@@ -8355,6 +8383,7 @@ function computeSessionListRenderKey() {
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
             s.stream_active ? 'r' : '',
+            s.unread_result ? 'u' : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
             s.subagent_running || 0,
@@ -8370,6 +8399,7 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
+            a.unread_result ? 'u' : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\\u001f'));
@@ -8695,8 +8725,7 @@ async function switchSession(sessionId) {
     clearTodoForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
-    sessionUnreadComplete.delete(sessionId);
-    persistSessionUnread();
+    clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
@@ -9085,7 +9114,10 @@ async function attachSessionEventStream(sessionId, opts) {
         void refreshSingleSessionRow(runSessionId);
         setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         await refreshContextTokensFromServer(runSessionId);
-        if (runSessionId === currentSessionId) updateSubagentContinueBanner(runSessionId);
+        if (runSessionId === currentSessionId) {
+            clearSessionUnreadState(runSessionId);
+            updateSubagentContinueBanner(runSessionId);
+        }
     }
 }
 
@@ -9250,6 +9282,7 @@ async function sendMessage() {
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);
         } else {
+            clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {
@@ -9591,7 +9624,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,L,k,_,P,A,R,B,F,M,N,O,H,D,q,U,j,W,G,z,K,V];Function(`"use strict";
+`,X=[I,x,C,w,T,E,L,k,_,P,A,R,B,F,M,N,O,H,D,U,q,j,W,G,z,K,V];Function(`"use strict";
 `+X.join(`
 
 `)+`

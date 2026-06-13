@@ -96,7 +96,10 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (isSessionRunning(sessionId)) {
         itemDiv.classList.add('is-generating');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '生成中…');
-    } else if (sessionUnreadComplete.has(sessionId)) {
+    } else {
+        var sess = sessionStore.get(sessionId);
+        var hasUnreadResult = sessionUnreadComplete.has(sessionId) || !!(sess && sess.unread_result);
+        if (!hasUnreadResult) return;
         itemDiv.classList.add('is-unread-result');
         if (nameEl) nameEl.setAttribute('data-ui-tip', '有新回复，点击查看');
     }
@@ -407,6 +410,7 @@ function computeSessionListRenderKey() {
             s.pinned ? 'p' : '',
             s.archived ? 'a' : '',
             s.stream_active ? 'r' : '',
+            s.unread_result ? 'u' : '',
             s.last_activity_at || s.updated_at || '',
             s.last_user_preview || '',
             s.subagent_running || 0,
@@ -422,6 +426,7 @@ function computeSessionListRenderKey() {
             a.id,
             a.name || '',
             a.pinned ? 'p' : '',
+            a.unread_result ? 'u' : '',
             a.last_activity_at || a.updated_at || '',
             a.last_user_preview || '',
         ].join('\u001f'));
@@ -747,8 +752,7 @@ async function switchSession(sessionId) {
     clearTodoForSessionLoad();
     pendingRewriteTruncate = null;
     hideRewriteUndoToast();
-    sessionUnreadComplete.delete(sessionId);
-    persistSessionUnread();
+    clearSessionUnreadState(sessionId);
     const leaving = currentSessionId;
     saveChatScrollForSession(leaving);
     stashInputDraft(leaving);
