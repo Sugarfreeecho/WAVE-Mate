@@ -170,11 +170,20 @@ app/runtime_v2/
 - RunRegistry 运行态管理。
 - StreamPublisher 发布订阅。
 - RuntimeGateway 统一入口。
+- RuntimeProjector 从 events.jsonl 重建 session/run/subagent 快照。
+- SnapshotStore 写入可重建快照缓存。
 - 基础单元测试。
 
 风险：
 
 - 不影响现有功能。
+
+当前状态：
+
+- 已完成第一版阶段 A 旁路内核。
+- 已覆盖 run finished / failed / interrupted 投影。
+- 已覆盖坏行 repair、并发 append seq 单调性、publisher 收事件、snapshot rebuild。
+- 尚未接入现有 MyAgent 主流程。
 
 ### 阶段 B：镜像写入
 

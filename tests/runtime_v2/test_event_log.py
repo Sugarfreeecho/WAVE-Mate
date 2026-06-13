@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 
 from app.runtime_v2 import SessionEventLog
@@ -29,6 +30,23 @@ class SessionEventLogTests(unittest.TestCase):
 
             self.assertEqual(result["dropped"], 1)
             self.assertEqual([ev.seq for ev in events], [1, 2])
+
+    def test_concurrent_append_keeps_monotonic_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+
+            def append_one(index):
+                log.append("s1", "message_user", {"index": index})
+
+            threads = [threading.Thread(target=append_one, args=(i,)) for i in range(12)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            events = log.read_all("s1")
+            self.assertEqual(len(events), 12)
+            self.assertEqual([ev.seq for ev in events], list(range(1, 13)))
 
 
 if __name__ == "__main__":

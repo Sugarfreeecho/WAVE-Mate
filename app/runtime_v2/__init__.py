@@ -10,6 +10,8 @@ from .event_log import SessionEventLog
 from .run_registry import RunRegistry
 from .stream_publisher import StreamPublisher
 from .gateway import RuntimeGateway
+from .projector import RuntimeProjector
+from .snapshot_store import SnapshotStore
 
 __all__ = [
     "RuntimeEvent",
@@ -18,4 +20,6 @@ __all__ = [
     "RunRegistry",
     "StreamPublisher",
     "RuntimeGateway",
+    "RuntimeProjector",
+    "SnapshotStore",
 ]

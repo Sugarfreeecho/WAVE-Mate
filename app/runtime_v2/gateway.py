@@ -6,7 +6,9 @@ from typing import Optional
 
 from .event_log import SessionEventLog
 from .event_schema import RuntimeEvent
+from .projector import RuntimeProjector
 from .run_registry import RunRegistry
+from .snapshot_store import SnapshotStore
 from .stream_publisher import StreamPublisher
 
 
@@ -22,6 +24,8 @@ class RuntimeGateway:
         self.event_log = event_log or SessionEventLog(self.root)
         self.run_registry = run_registry or RunRegistry()
         self.publisher = publisher or StreamPublisher()
+        self.projector = RuntimeProjector()
+        self.snapshots = SnapshotStore(self.root)
 
     async def append_event(
         self,
@@ -73,3 +77,14 @@ class RuntimeGateway:
 
     def state(self) -> dict:
         return self.run_registry.snapshot()
+
+    def rebuild_session_state(self, session_id: str) -> dict:
+        snapshot = self.projector.project(self.event_log.read_all(session_id))
+        self.snapshots.write(session_id, snapshot)
+        return snapshot
+
+    def read_snapshot(self, session_id: str) -> dict:
+        snapshot = self.snapshots.read(session_id)
+        if snapshot:
+            return snapshot
+        return self.rebuild_session_state(session_id)
