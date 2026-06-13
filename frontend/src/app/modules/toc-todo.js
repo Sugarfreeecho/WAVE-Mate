@@ -166,6 +166,7 @@ function clearTocForSessionLoad() {
     tocRebuildEpoch += 1;
     if (list) list.textContent = '';
     if (toc) toc.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 function clearTodoForSessionLoad() {
@@ -177,6 +178,7 @@ function clearTodoForSessionLoad() {
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
     if (root) root.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 function rebuildToc() {
@@ -259,6 +261,7 @@ function rebuildToc() {
             const users = rootForUsers ? rootForUsers.querySelectorAll('.msg-wrap--user') : [];
             if (users.length === 0) {
                 toc.classList.remove('is-open');
+                notifyPanelContentChanged();
                 return;
             }
             toc.classList.add('is-open');
@@ -286,6 +289,7 @@ function rebuildToc() {
                 }, ei);
             });
         }
+        notifyPanelContentChanged();
         if (tocScrollBottomOnNextBuild) {
             tocScrollBottomOnNextBuild = false;
             list.scrollTop = list.scrollHeight;
@@ -311,6 +315,7 @@ function hideTodoPlanPanel() {
     const root = document.getElementById('chat-todo-plan');
     if (!root) return;
     root.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 async function clearTodoPlan() {
@@ -325,6 +330,7 @@ async function clearTodoPlan() {
     const listEl = document.getElementById('chat-todo-plan-list');
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
+    notifyPanelContentChanged();
 }
 
 function renderTodoPlanSnapshot(snapshot) {
@@ -339,6 +345,7 @@ function renderTodoPlanSnapshot(snapshot) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
+        notifyPanelContentChanged();
         return;
     }
     const done = data.done;
@@ -359,6 +366,7 @@ function renderTodoPlanSnapshot(snapshot) {
         listEl.appendChild(li);
     });
     root.classList.add('is-open');
+    notifyPanelContentChanged();
 }
 
 function applyTodoPlanFromPayload(data) {
@@ -371,6 +379,7 @@ function renderTodoPlanForCurrentSession() {
 
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
+    const epoch = ++todoRefreshEpoch;
     if (!sid) {
         clearTodoPlanState(sid);
         hideTodoPlanPanel();
@@ -378,18 +387,21 @@ async function refreshTodoPlanPanel() {
         const listEl = document.getElementById('chat-todo-plan-list');
         if (statsEl) statsEl.textContent = '';
         if (listEl) listEl.textContent = '';
+        notifyPanelContentChanged();
         return;
     }
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/todo_plan');
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         if (!r.ok) {
             hideTodoPlanPanel();
             return;
         }
         const j = await r.json();
-        if (sid !== currentSessionId) return;
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         applyTodoPlanFromPayload(j);
     } catch (e) {
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         hideTodoPlanPanel();
     }
 }

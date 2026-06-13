@@ -92,6 +92,17 @@ function updatePanelToggles() {
     schedulePanelEdgeTabsLayout();
 }
 
+function notifyPanelContentChanged() {
+    if (typeof updatePanelToggles !== 'function') return;
+    updatePanelToggles();
+    if (typeof runPanelAutoCollapseCheck === 'function') {
+        requestAnimationFrame(function () {
+            runPanelAutoCollapseCheck();
+            schedulePanelEdgeTabsLayout();
+        });
+    }
+}
+
 /* 折叠三角挂在 stage 外层面，对齐面板边缘（收起后只剩按钮，不被 aside 裁切） */
 var panelEdgeTabsObserver = null;
 var panelEdgeTabsRaf = null;
@@ -207,30 +218,6 @@ function initPanelAutoCollapse() {
     panelAutoCollapseObserver.observe(mainEl);
     panelAutoCollapseObserver.observe(stage);
 }
-
-/* 在 rebuildToc 和 applyTodoPlanFromPayload 之后更新箭头可见性 —— 通过 monkey-patch */
-(function() {
-    var _origRebuildToc = rebuildToc;
-    rebuildToc = function() {
-        _origRebuildToc.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origApplyTodo = applyTodoPlanFromPayload;
-    applyTodoPlanFromPayload = function(data) {
-        _origApplyTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origRenderTodo = renderTodoPlanForCurrentSession;
-    renderTodoPlanForCurrentSession = function() {
-        _origRenderTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origClearTodo = clearTodoPlan;
-    clearTodoPlan = async function() {
-        await _origClearTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-})();
 
 initPanelAutoCollapse();
 initPanelEdgeTabsLayout();

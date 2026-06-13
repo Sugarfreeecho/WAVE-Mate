@@ -43,11 +43,15 @@ function setContextTokenLabel(estimated, threshold) {
     bindUiHoverTip(el);
 }
 
-async function refreshContextTokensFromServer(sid) {
+let contextTokenRequestSeq = 0;
+
+async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
+        if (seq != null && seq !== contextTokenRequestSeq) return;
+        if (sid !== currentSessionId) return;
         if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
             recordContextTokens(sid, j.estimated, j.threshold);
             return;
@@ -59,9 +63,10 @@ async function refreshContextTokensFromServer(sid) {
 /** 在浏览器完成首帧绘制后再请求 context_tokens，避免与切换会话/新建会话的 DOM 抢主线程。 */
 function scheduleContextTokensAfterPaint(sid) {
     if (!sid) return;
+    const seq = ++contextTokenRequestSeq;
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
-            refreshContextTokensFromServer(sid);
+            refreshContextTokensFromServer(sid, seq);
         });
     });
 }

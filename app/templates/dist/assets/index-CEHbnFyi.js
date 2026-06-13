@@ -2845,11 +2845,15 @@ function setContextTokenLabel(estimated, threshold) {
     bindUiHoverTip(el);
 }
 
-async function refreshContextTokensFromServer(sid) {
+let contextTokenRequestSeq = 0;
+
+async function refreshContextTokensFromServer(sid, seq) {
     if (!sid) return;
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/context_tokens');
         const j = await r.json();
+        if (seq != null && seq !== contextTokenRequestSeq) return;
+        if (sid !== currentSessionId) return;
         if (r.ok && j && j.ok && j.estimated != null && j.estimated >= 0) {
             recordContextTokens(sid, j.estimated, j.threshold);
             return;
@@ -2861,9 +2865,10 @@ async function refreshContextTokensFromServer(sid) {
 /** 在浏览器完成首帧绘制后再请求 context_tokens，避免与切换会话/新建会话的 DOM 抢主线程。 */
 function scheduleContextTokensAfterPaint(sid) {
     if (!sid) return;
+    const seq = ++contextTokenRequestSeq;
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
-            refreshContextTokensFromServer(sid);
+            refreshContextTokensFromServer(sid, seq);
         });
     });
 }
@@ -4183,6 +4188,7 @@ function clearTocForSessionLoad() {
     tocRebuildEpoch += 1;
     if (list) list.textContent = '';
     if (toc) toc.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 function clearTodoForSessionLoad() {
@@ -4194,6 +4200,7 @@ function clearTodoForSessionLoad() {
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
     if (root) root.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 function rebuildToc() {
@@ -4276,6 +4283,7 @@ function rebuildToc() {
             const users = rootForUsers ? rootForUsers.querySelectorAll('.msg-wrap--user') : [];
             if (users.length === 0) {
                 toc.classList.remove('is-open');
+                notifyPanelContentChanged();
                 return;
             }
             toc.classList.add('is-open');
@@ -4303,6 +4311,7 @@ function rebuildToc() {
                 }, ei);
             });
         }
+        notifyPanelContentChanged();
         if (tocScrollBottomOnNextBuild) {
             tocScrollBottomOnNextBuild = false;
             list.scrollTop = list.scrollHeight;
@@ -4328,6 +4337,7 @@ function hideTodoPlanPanel() {
     const root = document.getElementById('chat-todo-plan');
     if (!root) return;
     root.classList.remove('is-open');
+    notifyPanelContentChanged();
 }
 
 async function clearTodoPlan() {
@@ -4342,6 +4352,7 @@ async function clearTodoPlan() {
     const listEl = document.getElementById('chat-todo-plan-list');
     if (statsEl) statsEl.textContent = '';
     if (listEl) listEl.textContent = '';
+    notifyPanelContentChanged();
 }
 
 function renderTodoPlanSnapshot(snapshot) {
@@ -4356,6 +4367,7 @@ function renderTodoPlanSnapshot(snapshot) {
         listEl.textContent = '';
         statsEl.textContent = '';
         hideTodoPlanPanel();
+        notifyPanelContentChanged();
         return;
     }
     const done = data.done;
@@ -4376,6 +4388,7 @@ function renderTodoPlanSnapshot(snapshot) {
         listEl.appendChild(li);
     });
     root.classList.add('is-open');
+    notifyPanelContentChanged();
 }
 
 function applyTodoPlanFromPayload(data) {
@@ -4388,6 +4401,7 @@ function renderTodoPlanForCurrentSession() {
 
 async function refreshTodoPlanPanel() {
     const sid = currentSessionId;
+    const epoch = ++todoRefreshEpoch;
     if (!sid) {
         clearTodoPlanState(sid);
         hideTodoPlanPanel();
@@ -4395,18 +4409,21 @@ async function refreshTodoPlanPanel() {
         const listEl = document.getElementById('chat-todo-plan-list');
         if (statsEl) statsEl.textContent = '';
         if (listEl) listEl.textContent = '';
+        notifyPanelContentChanged();
         return;
     }
     try {
         const r = await fetch('/sessions/' + encodeURIComponent(sid) + '/todo_plan');
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         if (!r.ok) {
             hideTodoPlanPanel();
             return;
         }
         const j = await r.json();
-        if (sid !== currentSessionId) return;
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         applyTodoPlanFromPayload(j);
     } catch (e) {
+        if (epoch !== todoRefreshEpoch || sid !== currentSessionId) return;
         hideTodoPlanPanel();
     }
 }
@@ -9424,6 +9441,17 @@ function updatePanelToggles() {
     schedulePanelEdgeTabsLayout();
 }
 
+function notifyPanelContentChanged() {
+    if (typeof updatePanelToggles !== 'function') return;
+    updatePanelToggles();
+    if (typeof runPanelAutoCollapseCheck === 'function') {
+        requestAnimationFrame(function () {
+            runPanelAutoCollapseCheck();
+            schedulePanelEdgeTabsLayout();
+        });
+    }
+}
+
 /* 折叠三角挂在 stage 外层面，对齐面板边缘（收起后只剩按钮，不被 aside 裁切） */
 var panelEdgeTabsObserver = null;
 var panelEdgeTabsRaf = null;
@@ -9539,30 +9567,6 @@ function initPanelAutoCollapse() {
     panelAutoCollapseObserver.observe(mainEl);
     panelAutoCollapseObserver.observe(stage);
 }
-
-/* 在 rebuildToc 和 applyTodoPlanFromPayload 之后更新箭头可见性 —— 通过 monkey-patch */
-(function() {
-    var _origRebuildToc = rebuildToc;
-    rebuildToc = function() {
-        _origRebuildToc.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origApplyTodo = applyTodoPlanFromPayload;
-    applyTodoPlanFromPayload = function(data) {
-        _origApplyTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origRenderTodo = renderTodoPlanForCurrentSession;
-    renderTodoPlanForCurrentSession = function() {
-        _origRenderTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-    var _origClearTodo = clearTodoPlan;
-    clearTodoPlan = async function() {
-        await _origClearTodo.apply(this, arguments);
-        setTimeout(updatePanelToggles, 100);
-    };
-})();
 
 initPanelAutoCollapse();
 initPanelEdgeTabsLayout();

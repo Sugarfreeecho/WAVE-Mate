@@ -6,6 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "verify:dist": "python ../scripts/check_frontend_dist_sync.py",
+    "verify:commit": "python ../scripts/check_frontend_commit_policy.py",
+    "install:hooks": "python ../scripts/install_git_hooks.py",
     "preview": "vite preview"
   },
   "devDependencies": {
