@@ -780,7 +780,7 @@ function appendArchiveLoadButton(body) {
 function renderSessionTitleFromStore() {
     updateSessionTitle();
 }
-`,L=`const messageStore = {
+`,k=`const messageStore = {
     sessions: new Map(),
 
     ensureSession(sessionId) {
@@ -903,7 +903,7 @@ function selectMessageEventsInRange(sessionId, startIndex, endIndex) {
 function selectMessageEventCount(sessionId) {
     return messageStore.eventCount(sessionId);
 }
-`,k=`function renderMessageRecord(ctx, record, sessionId) {
+`,L=`function renderMessageRecord(ctx, record, sessionId) {
     if (!ctx || !record || !record.event) return null;
     const sid = sessionId || record.sessionId || currentSessionId;
     renderEvent(ctx, record.event, record.index, sid);
@@ -1224,7 +1224,7 @@ function trackSubagentStreamEventLightweight(card, agentId, event, eventIndex) {
     if (event.react_iter != null) bumpAggregateMaxReactIter(card, event.react_iter);
     scheduleSubagentCardStats(card);
 }
-`,B=`function subagentMoreDotsHtml() {
+`,R=`function subagentMoreDotsHtml() {
     return '<span class="session-more-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
 }
 
@@ -1729,7 +1729,7 @@ function applySubagentBlockFinish(blk, event) {
         preview.textContent = txt ? String(txt).slice(0, 500) : '';
     }
 }
-`,R=`var subagentBodyHtmlCache = Object.create(null);
+`,B=`var subagentBodyHtmlCache = Object.create(null);
 
 function subagentBodyCacheKey(sessionId, agentId) {
     return String(sessionId || '') + ':' + String(agentId || '');
@@ -8006,14 +8006,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
         + '</div></div>'
         + '</div>'
         + '<div class="session-last-query"></div>';
-    div.addEventListener('click', function (e) {
-        var target = e.target;
-        if (target && target.closest && target.closest('button, .session-more-wrap, .session-more-menu, input, textarea, a')) return;
-        if (target && target.isContentEditable) return;
-        Promise.resolve(switchSession(sess.id)).catch(function (err) {
-            console.error('切换会话失败:', err);
-        });
-    });
     var pinMi = div.querySelector('.session-menu-pin');
     var archMi = div.querySelector('.session-menu-archive');
     if (pinMi) pinMi.textContent = sess.pinned ? '取消置顶' : '置顶';
@@ -8023,11 +8015,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
     if (wsEl) {
         wsEl.textContent = wsLine;
         wsEl.setAttribute('data-ui-tip', wsLine);
-        wsEl.addEventListener('click', function () {
-            Promise.resolve(switchSession(sess.id)).catch(function (err) {
-                console.error('切换会话失败:', err);
-            });
-        });
         bindUiHoverTip(wsEl);
     }
     var moreWrap = div.querySelector('.session-more-wrap');
@@ -8060,7 +8047,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     if (previous) applyOptimisticSessionUpdate(sess.id, previous);
                     throw new Error('pin failed: ' + response.status);
                 }
-                sessionListCache.invalidate();
                 void loadSessions({ force: true });
             } catch (err) { console.error('置顶失败', err); }
         });
@@ -8080,7 +8066,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                     throw new Error('archive failed: ' + response.status);
                 }
                 const wasArchivedLoaded = sessionStore.archivedLoaded;
-                sessionListCache.invalidate();
                 void loadSessions({ force: true, skipArchivedRefresh: true });
                 if (wasArchivedLoaded) void loadArchivedSessions({ background: true });
             } catch (err) { console.error('归档失败', err); }
@@ -8126,7 +8111,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
                 setSendButtonState();
                 syncSessionListIndicatorClasses();
             }
-            sessionListCache.invalidate();
             if (currentSessionId === deletedSessionId) {
                 if (nextSession) await switchSession(nextSession.id);
                 else await createNewSession();
@@ -8187,13 +8171,6 @@ function buildAndBindSessionRow(sess, allSessions, nextStreamMap) {
             } else nameSpan.innerText = nameSpan.dataset.original;
         });
         nameSpan.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); nameSpan.blur(); } });
-        nameSpan.addEventListener('click', function () {
-            if (!nameSpan.classList.contains('editing')) {
-                Promise.resolve(switchSession(sess.id)).catch(function (err) {
-                    console.error('切换会话失败:', err);
-                });
-            }
-        });
     }
     applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
     return div;
@@ -8203,71 +8180,24 @@ async function refreshSingleSessionRow(sessionId) {
     if (!sessionId || !sessionsList) return;
     try {
         const response = await fetch('/sessions/' + encodeURIComponent(sessionId));
-        if (!response.ok) {
-            return;
-        }
+        if (!response.ok) return;
         const sess = await response.json();
-        if (!sess || !sess.id) {
-            return;
-        }
-        sessionStore.upsert(sess);
-        sessionListCache.invalidate();
+        if (!sess || !sess.id) return;
+        applySessionPatch({
+            session: sess,
+            session_id: sess.id,
+            stream_active: !!sess.stream_active,
+        });
         setSessionServerStreamActive(sess.id, !!sess.stream_active);
-        const item = sessionsList.querySelector('.session-name[data-id="' + sess.id + '"]');
-        const div = item && item.closest('.session-item');
-        if (!div) {
-            renderSessionListIfChanged(false);
-            return;
-        }
-        const nameSpan = div.querySelector('.session-name[data-id]');
-        if (nameSpan && sess.name != null) {
-            nameSpan.textContent = sess.name;
-            nameSpan.setAttribute('data-original', sess.name);
-        }
-        var wsEl2 = div.querySelector('.session-last-query');
-        if (wsEl2) {
-            var wsLine2 = formatSessionListSubtitle(sess);
-            wsEl2.textContent = wsLine2;
-            wsEl2.setAttribute('data-ui-tip', wsLine2);
-            bindUiHoverTip(wsEl2);
-        }
-        var pinMi2 = div.querySelector('.session-menu-pin');
-        var archMi2 = div.querySelector('.session-menu-archive');
-        if (pinMi2) pinMi2.textContent = sess.pinned ? '取消置顶' : '置顶';
-        if (archMi2) archMi2.textContent = sess.archived ? '取消归档' : '归档';
-        div.classList.toggle('active', sess.id === currentSessionId);
         if (Number(sess.subagent_running || 0) > 0) {
             sessionUnreadComplete.delete(sess.id);
             persistSessionUnread();
         }
-        applySessionItemIndicators(div, sess.id, { serverStreamActive: !!sess.stream_active });
-        updateSessionTitle();
+        renderSessionListIfChanged(false);
     } catch (e) {
         console.error('刷新会话摘要失败:', e);
     }
 }
-
-// 会话列表缓存
-const sessionListCache = {
-    data: null,
-    timestamp: 0,
-    // Compatibility shell; session snapshots are now fetched on every refresh.
-    TTL: 0,
-    
-    get() {
-        return null;
-    },
-    
-    set(data) {
-        this.data = null;
-        this.timestamp = 0;
-    },
-    
-    invalidate() {
-        this.data = null;
-        this.timestamp = 0;
-    }
-};
 
 let sessionListLoadEpoch = 0;
 let sessionListRenderKey = '';
@@ -8461,87 +8391,6 @@ async function loadSessions(opts) {
             void loadArchivedSessions({ background: true });
         }
         return;
-
-        const pinnedList = [];
-        const normalList = [];
-        const archivedList = sessionStore.archivedList();
-        for (let i = 0; i < allSessions.length; i += 1) {
-            const s = allSessions[i];
-            if (!s || !s.id) continue;
-            const arch = !!s.archived;
-            const pin = !!s.pinned;
-            if (arch) continue;
-            else if (pin) pinnedList.push(s);
-            else normalList.push(s);
-        }
-
-        function appendSection(sectionKey, title, list) {
-            if (!list.length && sectionKey !== 'archived') return;
-            var displayCount = sectionKey === 'archived' && !archivedSessionsLoaded
-                ? archivedSessionsCount
-                : list.length;
-            var expanded = sessionSectionExpanded(sectionKey);
-            var sec = document.createElement('div');
-            sec.className = 'session-section' + (expanded ? '' : ' is-collapsed');
-            sec.dataset.section = sectionKey;
-            var toggle = document.createElement('button');
-            toggle.type = 'button';
-            toggle.className = 'session-section-toggle';
-            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            toggle.innerHTML = '<span class="session-section-toggle-label">' + escapeHtml(title) + '</span>'
-                + '<span class="session-section-meta">'
-                + '<span class="session-section-count">' + String(displayCount) + '</span>'
-                + '<span class="session-section-chev" aria-hidden="true">▼</span>'
-                + '</span>';
-            toggle.addEventListener('click', function (e) {
-                e.preventDefault();
-                sec.classList.toggle('is-collapsed');
-                var isExpanded = !sec.classList.contains('is-collapsed');
-                persistSessionSectionExpanded(sectionKey, isExpanded);
-                toggle.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-            });
-            var body = document.createElement('div');
-            body.className = 'session-section-body';
-            if (sectionKey === 'archived') {
-                var loadBtn = document.createElement('button');
-                loadBtn.type = 'button';
-                loadBtn.className = 'session-archive-load-btn';
-                loadBtn.textContent = archivedSessionsLoaded ? '刷新归档目录' : '加载归档目录';
-                loadBtn.addEventListener('click', async function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    loadBtn.disabled = true;
-                    loadBtn.textContent = '加载中...';
-                    try {
-                        const response = await fetch('/sessions?include_archived=true');
-                        const sessions = await response.json();
-                        const all = Array.isArray(sessions) ? sessions : [];
-                        sessionStore.setArchivedLoaded(all);
-                        syncArchivedSessionStateFromStore();
-                        sessionListCache.set(all.filter(function (s) { return s && s.id && !s.archived; }));
-                        await loadSessions();
-                    } catch (err) {
-                        console.error('加载归档目录失败:', err);
-                        loadBtn.disabled = false;
-                        loadBtn.textContent = archivedSessionsLoaded ? '刷新归档目录' : '加载归档目录';
-                    }
-                });
-                body.appendChild(loadBtn);
-            }
-            for (let j = 0; j < list.length; j += 1) {
-                body.appendChild(buildAndBindSessionRow(list[j], allSessions, nextStreamMap));
-            }
-            sec.appendChild(toggle);
-            sec.appendChild(body);
-            sessionsList.appendChild(sec);
-        }
-
-        appendSection('pinned', '置顶目录', pinnedList);
-        appendSection('normal', '会话目录', normalList);
-        appendSection('archived', '归档目录', archivedList);
-
-        applyServerStreamActiveMap(nextStreamMap);
-        updateSessionTitle();
     } catch (error) {
         sessionStore.ui.loadingSessions = false;
         console.error('加载会话列表失败:', error);
@@ -8788,7 +8637,6 @@ async function createNewSessionInner() {
             renderSessionListIfChanged(true);
             void loadSessions({ force: true });
         } else {
-            sessionListCache.invalidate();
             await loadSessions({ force: true });
         }
         setSendButtonState();
@@ -9577,7 +9425,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.toggleTodoPlanPanel = toggleTodoPlanPanel;
     globalThis.toggleTocPanel = toggleTocPanel;
 }
-`,X=[I,x,C,w,T,E,L,k,_,P,A,B,R,F,M,N,O,D,H,q,U,j,W,G,K,z,V];Function(`"use strict";
+`,X=[I,x,C,w,T,E,k,L,_,P,A,R,B,F,M,N,O,D,H,q,U,j,W,G,K,z,V];Function(`"use strict";
 `+X.join(`
 
 `)+`
