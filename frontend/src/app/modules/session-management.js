@@ -23,7 +23,9 @@ function pauseCurrentRun() {
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
+        renderSessionListIfChanged(false);
         void requestInterrupt(sid);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         return;
     }
     const ctx = run.ctx;
@@ -32,9 +34,11 @@ function pauseCurrentRun() {
     abortSessionRun(sid, 'user');
     setSendButtonState();
     syncSessionListIndicatorClasses();
+    renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
     void requestInterrupt(sid);
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
 }
 
 /** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */

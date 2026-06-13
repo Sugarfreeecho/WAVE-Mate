@@ -33,6 +33,7 @@ function selectArchivedDisplayCount() {
 
 function selectIsSessionRunning(sessionId) {
     if (!sessionId) return false;
+    if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sessionId)) return false;
     if (sessionStore.hasRun(sessionId)) return true;
     const info = sessionStore.getActiveRunInfo(sessionId);
     if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {

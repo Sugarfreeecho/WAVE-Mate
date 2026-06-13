@@ -347,9 +347,15 @@ function showUiAlert(opts) {
             if (!s || !s.id) continue;
             const sid = String(s.id);
             if (this.isDeletedSessionTombstoned(sid)) continue;
-            nextById.set(sid, s);
+            const nextSession = Object.assign({}, s);
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
+                nextSession.stream_active = false;
+                nextSession.run_active = false;
+                nextSession.run_started_at = null;
+            }
+            nextById.set(sid, nextSession);
             nextOrder.push(sid);
-            nextStreamActive[sid] = !!s.stream_active;
+            nextStreamActive[sid] = !!nextSession.stream_active;
         }
         this.sessionsById = nextById;
         this.sessionOrder = nextOrder;
@@ -499,6 +505,7 @@ function showUiAlert(opts) {
         list.forEach(function (run) {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
         });
         this.activeRunInfoBySession = next;
@@ -542,6 +549,13 @@ function suppressSessionServerStreamActive(sessionId, ms) {
     if (!sid) return;
     sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
     sessionStore.setStreamActive(sid, false);
+    sessionStore.activeRunInfoBySession.delete(sid);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.stream_active = false;
+        sess.run_active = false;
+        sess.run_started_at = null;
+    }
 }
 
 function setSessionServerStreamActive(sessionId, active) {
@@ -605,6 +619,7 @@ function selectArchivedDisplayCount() {
 
 function selectIsSessionRunning(sessionId) {
     if (!sessionId) return false;
+    if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sessionId)) return false;
     if (sessionStore.hasRun(sessionId)) return true;
     const info = sessionStore.getActiveRunInfo(sessionId);
     if (info && Object.prototype.hasOwnProperty.call(info, 'run_active')) {
@@ -7849,7 +7864,9 @@ function pauseCurrentRun() {
     if (!run) {
         setSendButtonState();
         syncSessionListIndicatorClasses();
+        renderSessionListIfChanged(false);
         void requestInterrupt(sid);
+        setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
         return;
     }
     const ctx = run.ctx;
@@ -7858,9 +7875,11 @@ function pauseCurrentRun() {
     abortSessionRun(sid, 'user');
     setSendButtonState();
     syncSessionListIndicatorClasses();
+    renderSessionListIfChanged(false);
     appendLog(ctx, '已请求停止当前任务', 'status', sid);
     sealProcessGroup(ctx);
     void requestInterrupt(sid);
+    setTimeout(function () { reconcileRunStateFromServer({ silent: true }); }, 800);
 }
 
 /** 在当前对话中定位最近一条用户消息并重新发送。返回 true 表示已触发展开发送。 */
