@@ -85,6 +85,22 @@ class RuntimeMirror:
             return {"type": "context_tokens", "payload": dict(event)}
         if event_type == "todo_plan":
             return {"type": "todo_updated", "payload": dict(event)}
+        if event_type == "context_summary_body":
+            return {
+                "type": "context_summary_committed",
+                "payload": {
+                    "summary": event.get("content") or event.get("summary") or event.get("text") or "",
+                    "source": "legacy_ui_event",
+                },
+            }
+        if event_type == "context_summary_finished":
+            return {
+                "type": "legacy_compress_observed",
+                "payload": {
+                    "reason": event.get("reason") or event.get("mode") or "",
+                    "source": "legacy_ui_event",
+                },
+            }
         if event_type in {"subagent_started", "subagent_progress", "subagent_finished", "subagent_failed", "subagent_result_consumed"}:
             return {"type": event_type, "payload": self._slim_subagent_payload(event)}
         if event_type in {"tool_call", "tool_result"}:

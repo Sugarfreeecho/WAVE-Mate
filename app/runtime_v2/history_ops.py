@@ -77,6 +77,90 @@ class RuntimeHistoryOps:
             payload["to_seq"] = int(to_seq)
         return self._append_and_snapshot(session_id, "model_window_changed", payload)
 
+    def observe_legacy_truncate(
+        self,
+        session_id: str,
+        *,
+        before_index: int,
+        old_event_count: int,
+        new_event_count: int,
+        boundary_for_branch: bool = False,
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "legacy_truncate_observed", {
+            "before_index": int(before_index),
+            "old_event_count": int(old_event_count),
+            "new_event_count": int(new_event_count),
+            "boundary_for_branch": bool(boundary_for_branch),
+        })
+
+    def observe_legacy_tail_restored(
+        self,
+        session_id: str,
+        *,
+        tail_count: int,
+        merged_event_count: int,
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "legacy_tail_restored_observed", {
+            "tail_count": int(tail_count),
+            "merged_event_count": int(merged_event_count),
+        })
+
+    def observe_legacy_branch(
+        self,
+        session_id: str,
+        *,
+        source_session_id: str,
+        new_session_id: str,
+        before_index: int,
+        new_event_count: int,
+        name: str = "",
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "legacy_branch_observed", {
+            "source_session_id": source_session_id,
+            "new_session_id": new_session_id,
+            "before_index": int(before_index),
+            "new_event_count": int(new_event_count),
+            "name": name,
+        })
+
+    def observe_legacy_subagent_deleted(
+        self,
+        session_id: str,
+        *,
+        child_session_id: str,
+        descendant_count: int = 0,
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "legacy_subagent_deleted_observed", {
+            "child_session_id": child_session_id,
+            "descendant_count": int(descendant_count),
+        })
+
+    def observe_legacy_virtual_subagent_deleted(
+        self,
+        session_id: str,
+        *,
+        task_id: str,
+    ) -> RuntimeEvent:
+        return self._append_and_snapshot(session_id, "legacy_virtual_subagent_deleted_observed", {
+            "task_id": task_id,
+        })
+
+    def observe_legacy_compress(
+        self,
+        session_id: str,
+        *,
+        summary: str = "",
+        source_seq: Optional[int] = None,
+        reason: str = "",
+    ) -> RuntimeEvent:
+        payload = {
+            "summary": summary,
+            "reason": reason,
+        }
+        if source_seq is not None:
+            payload["source_seq"] = int(source_seq)
+        return self._append_and_snapshot(session_id, "legacy_compress_observed", payload)
+
     def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict) -> RuntimeEvent:
         event = self.event_log.append(session_id, event_type, payload=payload)
         snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)

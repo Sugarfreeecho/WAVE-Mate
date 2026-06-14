@@ -29,6 +29,7 @@ class RuntimeProjector:
             "context": {},
             "todo": None,
             "history_ops": [],
+            "legacy_observations": [],
             "visible_range": {},
             "model_window": {},
         }
@@ -97,6 +98,8 @@ class RuntimeProjector:
             "model_window_changed",
         }:
             self._apply_history_op(snapshot, event)
+        elif event_type.startswith("legacy_") and event_type.endswith("_observed"):
+            self._apply_legacy_observation(snapshot, event)
         return snapshot
 
     def _append_message(self, snapshot: dict, event: RuntimeEvent, role: str) -> None:
@@ -166,6 +169,14 @@ class RuntimeProjector:
                 "source_seq": payload.get("source_seq"),
                 "changed_at_seq": event.seq,
             }
+
+    def _apply_legacy_observation(self, snapshot: dict, event: RuntimeEvent) -> None:
+        snapshot["legacy_observations"].append({
+            "seq": event.seq,
+            "timestamp": event.timestamp,
+            "type": event.type,
+            "payload": dict(event.payload or {}),
+        })
 
     def _rebuild_projected_messages(self, snapshot: dict) -> None:
         deleted = set()

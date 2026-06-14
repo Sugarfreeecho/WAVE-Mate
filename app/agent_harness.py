@@ -2552,6 +2552,16 @@ class SessionManager:
         except Exception as e:
             logger.warning(f"append_ui_event 失败: {e}")
 
+    def _observe_runtime_v2_history(self, method_name: str, session_id: str, **kwargs) -> None:
+        try:
+            from runtime_v2.history_ops import RuntimeHistoryOps
+
+            ops = RuntimeHistoryOps(self.repository.sessions_dir)
+            method = getattr(ops, method_name)
+            method(session_id, **kwargs)
+        except Exception as exc:
+            logger.debug("Runtime V2 observe %s failed for session %s: %s", method_name, session_id, exc)
+
     def get_ui_events_for_display(self, session_id: str) -> List[dict]:
         """返回与流式接口相同结构的事件列表，供前端仅调用 renderEvent 重放。"""
         return self._load_ui_events(session_id)
@@ -2909,6 +2919,14 @@ class SessionManager:
             )
             if consumed_cprefix:
                 self.remove_llm_compress_prefix_backup(session_id, consumed_cprefix)
+            self._observe_runtime_v2_history(
+                "observe_legacy_truncate",
+                session_id,
+                before_index=before_index,
+                old_event_count=n,
+                new_event_count=len(new_events),
+                boundary_for_branch=boundary_for_branch,
+            )
             return True
         except Exception as e:
             logger.warning(f"truncate_session_at_event_index 失败: {e}")
@@ -3024,6 +3042,22 @@ class SessionManager:
                 sid,
                 before_index,
                 branch_name,
+            )
+            self._observe_runtime_v2_history(
+                "observe_legacy_branch",
+                sid,
+                source_session_id=sid,
+                new_session_id=new_id,
+                before_index=before_index,
+                new_event_count=len(new_events),
+                name=branch_name,
+            )
+            self._observe_runtime_v2_history(
+                "create_branch",
+                new_id,
+                source_session_id=sid,
+                branch_from_seq=before_index,
+                name=branch_name,
             )
             return {"session_id": new_id, "name": branch_name}
         except Exception as e:
@@ -3150,6 +3184,12 @@ class SessionManager:
             self._save_llm_history(session_id, new_llm)
             self._save_dialogue_history(
                 session_id, self.dialogue_dicts_from_ui_events_file(session_id)
+            )
+            self._observe_runtime_v2_history(
+                "observe_legacy_tail_restored",
+                session_id,
+                tail_count=len(clean),
+                merged_event_count=len(merged),
             )
             return True
         except Exception as e:
@@ -3518,6 +3558,11 @@ class SessionManager:
             except Exception:
                 pass
         logger.info("已删除虚拟 subagent/task %s ← parent=%s", tid, parent_id)
+        self._observe_runtime_v2_history(
+            "observe_legacy_virtual_subagent_deleted",
+            parent_id,
+            task_id=tid,
+        )
         return True
 
     def delete_subagent_session(self, parent_session_id: str, child_session_id: str) -> bool:
@@ -3540,6 +3585,12 @@ class SessionManager:
             if p and p.exists():
                 shutil.rmtree(p, ignore_errors=True)
         self._remove_subagent_parent_rows(parent_id, child_id)
+        self._observe_runtime_v2_history(
+            "observe_legacy_subagent_deleted",
+            parent_id,
+            child_session_id=child_id,
+            descendant_count=max(0, len(ids) - 1),
+        )
         logger.info(
             "已删除 subagent %s ← parent=%s（含 descendants=%s）",
             child_id,

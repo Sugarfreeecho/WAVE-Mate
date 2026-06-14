@@ -58,6 +58,20 @@ class RuntimeMirrorTests(unittest.TestCase):
             self.assertTrue((mirror.sessions_dir / "s1" / ref["blob_ref"]).exists())
             self.assertEqual(ref["bytes"], 17000)
 
+    def test_mirrors_context_summary_body_as_committed_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+            mirror.mirror_ui_event("s1", {
+                "type": "context_summary_body",
+                "content": "summary text",
+            })
+
+            snapshot = mirror.snapshots.read("s1")
+            event = mirror.event_log.read_all("s1")[0]
+
+            self.assertEqual(event.type, "context_summary_committed")
+            self.assertEqual(snapshot["context"]["summary"]["summary"], "summary text")
+
 
 if __name__ == "__main__":
     unittest.main()

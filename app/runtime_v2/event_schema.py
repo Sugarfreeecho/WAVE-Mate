@@ -36,6 +36,12 @@ CORE_EVENT_TYPES = {
     "context_summary_committed",
     "visible_range_changed",
     "model_window_changed",
+    "legacy_truncate_observed",
+    "legacy_tail_restored_observed",
+    "legacy_branch_observed",
+    "legacy_subagent_deleted_observed",
+    "legacy_virtual_subagent_deleted_observed",
+    "legacy_compress_observed",
 }
 
 
