@@ -2546,8 +2546,6 @@ class SessionManager:
                 if changed:
                     self._save_index()
                 self.clear_session_unread_result(session_id)
-            elif event_copy.get("type") == "error":
-                self.mark_session_unread_result(session_id, status="failed")
             elif event_copy.get("type") == "final":
                 final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
                 self.mark_session_unread_result(session_id, status=final_status)
@@ -3839,6 +3837,8 @@ class SessionManager:
         text = str((event or {}).get("content") or "").strip()
         if not text:
             return True
+        if "工具执行异常" in text:
+            return False
         failure_markers = (
             "任务已由用户中断",
             "调用失败",
@@ -3862,8 +3862,6 @@ class SessionManager:
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
-            if metadata.get("unread_result_status") == "failed" and result_status == "success":
-                result_status = "failed"
             metadata["unread_result"] = True
             metadata["unread_result_at"] = now
             metadata["unread_result_status"] = result_status
@@ -3872,8 +3870,6 @@ class SessionManager:
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
-                    if sess.get("unread_result_status") == "failed" and result_status == "success":
-                        result_status = "failed"
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
                     sess["unread_result_status"] = result_status
