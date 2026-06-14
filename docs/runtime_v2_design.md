@@ -202,6 +202,34 @@ app/runtime_v2/
 - Runtime V2 镜像失败只写 debug，不影响旧流程。
 - Runtime V2 镜像日志写在现有 session 目录下的 `events.jsonl`，快照写在 `snapshots/latest.json`。
 
+### 阶段 B2：原生历史操作与对比
+
+阶段 B2 不重复旧 truncate，也不把旧 `ui_events.json` 的裁剪结果写回 Runtime V2。
+
+Runtime V2 采用 append-only 操作事件：
+
+- `message_deleted`
+- `message_rewritten`
+- `history_branch_created`
+- `history_compacted`
+- `context_summary_committed`
+- `visible_range_changed`
+- `model_window_changed`
+
+Projector 根据这些事件生成：
+
+- `messages`：原始消息流，不物理删除。
+- `visible_messages`：当前前端可见历史。
+- `model_messages`：当前可组装给模型的历史，支持压缩摘要替代早期消息。
+
+新增对比脚本：
+
+```text
+python scripts/compare_runtime_v2_session.py <session_id>
+```
+
+它只读旧 `ui_events.json` 和 Runtime V2 投影，输出缺失、额外、重复、顺序差异。用途是定位旧路径与 V2 投影从哪一步开始分叉。
+
 ### 阶段 C：只读调试接口
 
 新增：

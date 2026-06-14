@@ -13,6 +13,7 @@ from .gateway import RuntimeGateway
 from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 from .mirror import RuntimeMirror
+from .history_ops import RuntimeHistoryOps
 
 __all__ = [
     "RuntimeEvent",
@@ -24,4 +25,5 @@ __all__ = [
     "RuntimeProjector",
     "SnapshotStore",
     "RuntimeMirror",
+    "RuntimeHistoryOps",
 ]

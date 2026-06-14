@@ -29,6 +29,13 @@ CORE_EVENT_TYPES = {
     "context_summary_finished",
     "todo_updated",
     "legacy_ui_event",
+    "message_deleted",
+    "message_rewritten",
+    "history_branch_created",
+    "history_compacted",
+    "context_summary_committed",
+    "visible_range_changed",
+    "model_window_changed",
 }
 
 
