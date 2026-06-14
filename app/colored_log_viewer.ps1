@@ -9,6 +9,13 @@ chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()
 $Host.UI.RawUI.WindowTitle = [string]::Concat('Agent ', [char]0x7ec8, [char]0x7aef, [char]0x4fe1, [char]0x606f)
+try {
+  $bufferSize = $Host.UI.RawUI.BufferSize
+  $bufferSize.Height = [Math]::Max(2000, $Host.UI.RawUI.WindowSize.Height)
+  $Host.UI.RawUI.BufferSize = $bufferSize
+} catch {
+  # Some hosts do not allow changing the scrollback buffer.
+}
 
 function Write-AgentLogLine {
   param([AllowNull()][string]$Line)
