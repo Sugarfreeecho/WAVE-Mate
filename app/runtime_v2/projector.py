@@ -15,8 +15,8 @@ TERMINAL_RUN_TYPES = {
 class RuntimeProjector:
     """Rebuild a session snapshot from Runtime V2 events."""
 
-    def project(self, events: Iterable[RuntimeEvent]) -> dict:
-        snapshot = {
+    def empty_snapshot(self) -> dict:
+        return {
             "session_id": None,
             "last_seq": 0,
             "updated_at": None,
@@ -32,14 +32,36 @@ class RuntimeProjector:
             "visible_range": {},
             "model_window": {},
         }
+
+    def project(self, events: Iterable[RuntimeEvent]) -> dict:
+        snapshot = self.empty_snapshot()
         for event in events:
             self.apply(snapshot, event)
+        self.finalize(snapshot)
+        return snapshot
+
+    def project_incremental(self, snapshot: dict, event: RuntimeEvent) -> dict:
+        if not snapshot:
+            snapshot = self.empty_snapshot()
+        self._ensure_shape(snapshot)
+        self.apply(snapshot, event)
+        self.finalize(snapshot)
+        return snapshot
+
+    def finalize(self, snapshot: dict) -> dict:
+        self._ensure_shape(snapshot)
         self._rebuild_projected_messages(snapshot)
         snapshot["active_runs"] = [
             run for run in snapshot["runs"].values()
             if run.get("status") not in {"finished", "failed", "interrupted"}
         ]
         return snapshot
+
+    def _ensure_shape(self, snapshot: dict) -> None:
+        defaults = self.empty_snapshot()
+        for key, value in defaults.items():
+            if key not in snapshot:
+                snapshot[key] = value
 
     def apply(self, snapshot: dict, event: RuntimeEvent) -> dict:
         snapshot["session_id"] = snapshot.get("session_id") or event.session_id

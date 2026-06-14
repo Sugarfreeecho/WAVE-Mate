@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Path
+  [string]$Path,
+
+  [int]$TailLines = 1000
 )
 
 chcp 65001 > $null
@@ -40,6 +42,8 @@ if (-not (Test-Path -LiteralPath $Path)) {
   return
 }
 
-Get-Content -LiteralPath $Path -Encoding UTF8 -Wait | ForEach-Object {
+$TailLines = [Math]::Max(1, $TailLines)
+Clear-Host
+Get-Content -LiteralPath $Path -Encoding UTF8 -Tail $TailLines -Wait | ForEach-Object {
   Write-AgentLogLine $_
 }

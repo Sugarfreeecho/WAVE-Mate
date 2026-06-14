@@ -79,6 +79,6 @@ class RuntimeHistoryOps:
 
     def _append_and_snapshot(self, session_id: str, event_type: str, payload: dict) -> RuntimeEvent:
         event = self.event_log.append(session_id, event_type, payload=payload)
-        snapshot = self.projector.project(self.event_log.read_all(session_id))
+        snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
         self.snapshots.write(session_id, snapshot)
         return event

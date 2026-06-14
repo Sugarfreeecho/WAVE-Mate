@@ -35,6 +35,8 @@ class RuntimeGateway:
         run_id: Optional[str] = None,
     ) -> RuntimeEvent:
         event = self.event_log.append(session_id, event_type, payload=payload, run_id=run_id)
+        snapshot = self.projector.project_incremental(self.snapshots.read(session_id), event)
+        self.snapshots.write(session_id, snapshot)
         await self.publisher.publish(event)
         return event
 

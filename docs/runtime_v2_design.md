@@ -75,12 +75,20 @@ Runtime V2 采用同类思路：
 
 ```text
 workspace/sessions/{session_id}/
-├── events.jsonl
 ├── metadata.json
+├── events.jsonl
 ├── snapshots/
 │   └── latest.json
-└── blobs/
-    └── {hash}.txt
+├── blobs/
+│   └── {sha256}.txt
+└── subagents/
+    └── {agent_id}/
+        ├── metadata.json
+        ├── events.jsonl
+        ├── snapshots/
+        │   └── latest.json
+        └── blobs/
+            └── {sha256}.txt
 ```
 
 全局索引：
@@ -91,10 +99,11 @@ workspace/sessions/index.json
 
 其中：
 
-- `events.jsonl` 是唯一核心事实源。
+- `events.jsonl` 是唯一核心事实源；暂缓事件日志分段，除非有真实性能数据证明必须引入。
 - `metadata.json` 保存标题、归档、置顶、更新时间等快速字段。
 - `snapshots/latest.json` 是加速恢复的派生数据。
-- `blobs/` 保存大工具输出、长文本、附件等。
+- `blobs/` 保存大工具输出、长文本、附件等；镜像路径会把超过阈值的工具/legacy 文本外置为 `*_ref`。
+- `subagents/{agent_id}/` 保存子 Agent 独立事件日志、快照、metadata；父会话只保留瘦身后的索引/状态事件。
 - `index.json` 只加速左侧列表，可重建。
 
 ## 标准事件
@@ -201,6 +210,10 @@ app/runtime_v2/
 - `agent_loop.astream_events_continuation()` 会把续接 run started / finished / failed / interrupted 镜像为 Runtime V2 run 事件。
 - Runtime V2 镜像失败只写 debug，不影响旧流程。
 - Runtime V2 镜像日志写在现有 session 目录下的 `events.jsonl`，快照写在 `snapshots/latest.json`。
+- Snapshot 采用增量投影：正常追加时用旧 snapshot + 新 event 更新，缺失或损坏时再全量重放。
+- Subagent 事件会写入父会话 `subagents/{agent_id}/events.jsonl`，父会话主日志只保留瘦身索引事件。
+- 工具结果、legacy 事件中的超长文本会外置到 `blobs/{sha256}.txt`，事件 payload 中保留引用。
+- EventLog 提供 `read_latest(limit)`、`read_before_seq(before_seq, limit)`、`read_after_seq(after_seq)`，作为后续前端分页和 SSE 重连的按需读取基础。
 
 ### 阶段 B2：原生历史操作与对比
 

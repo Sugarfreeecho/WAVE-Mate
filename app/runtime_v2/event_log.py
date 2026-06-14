@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from collections import deque
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -71,6 +72,26 @@ class SessionEventLog:
 
     def read_after_seq(self, session_id: str, after_seq: int) -> List[RuntimeEvent]:
         return [ev for ev in self.iter_events(session_id) if ev.seq > after_seq]
+
+    def read_latest(self, session_id: str, limit: int) -> List[RuntimeEvent]:
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        rows = deque(maxlen=limit)
+        for ev in self.iter_events(session_id):
+            rows.append(ev)
+        return list(rows)
+
+    def read_before_seq(self, session_id: str, before_seq: int, limit: int) -> List[RuntimeEvent]:
+        before = int(before_seq)
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return []
+        rows = deque(maxlen=limit)
+        for ev in self.iter_events(session_id):
+            if ev.seq < before:
+                rows.append(ev)
+        return list(rows)
 
     def iter_events(self, session_id: str) -> Iterable[RuntimeEvent]:
         path = self.event_path(session_id)

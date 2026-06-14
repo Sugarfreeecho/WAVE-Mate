@@ -14,6 +14,7 @@ class SessionEventLogTests(unittest.TestCase):
 
             self.assertEqual(first.seq, 1)
             self.assertEqual(second.seq, 2)
+            self.assertTrue(log.event_path("s1").exists())
             self.assertEqual([ev.seq for ev in log.read_after_seq("s1", 1)], [2])
 
     def test_repair_drops_bad_lines_and_renumbers(self):
@@ -47,6 +48,15 @@ class SessionEventLogTests(unittest.TestCase):
             events = log.read_all("s1")
             self.assertEqual(len(events), 12)
             self.assertEqual([ev.seq for ev in events], list(range(1, 13)))
+
+    def test_on_demand_reads_support_latest_and_before_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = SessionEventLog(tmp)
+            for i in range(6):
+                log.append("s1", "message_user", {"index": i})
+
+            self.assertEqual([ev.seq for ev in log.read_latest("s1", 2)], [5, 6])
+            self.assertEqual([ev.seq for ev in log.read_before_seq("s1", 5, 2)], [3, 4])
 
 
 if __name__ == "__main__":

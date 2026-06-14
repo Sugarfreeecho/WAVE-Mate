@@ -14,6 +14,8 @@ from .projector import RuntimeProjector
 from .snapshot_store import SnapshotStore
 from .mirror import RuntimeMirror
 from .history_ops import RuntimeHistoryOps
+from .blob_store import BlobStore
+from .subagent_store import RuntimeSubagentStore
 
 __all__ = [
     "RuntimeEvent",
@@ -26,4 +28,6 @@ __all__ = [
     "SnapshotStore",
     "RuntimeMirror",
     "RuntimeHistoryOps",
+    "BlobStore",
+    "RuntimeSubagentStore",
 ]
