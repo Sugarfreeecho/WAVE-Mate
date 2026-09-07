@@ -186,6 +186,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow', '本次允许': 'Allow this time',
     '允许一次': 'Allow once', '本任务内允许相同请求': 'Allow identical requests in this task', '始终允许此类操作': 'Always allow this kind of operation', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
     '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered', '未回答': 'Not answered',
+    '展开或收起完整请求': 'Expand or collapse the full request',
+    '此请求已处理，仅供查看，无法再次操作。': 'This request has been processed. It is read-only and cannot be changed.',
+    '此请求已结束，仅供查看，无法再次操作。': 'This request has ended. It is read-only and cannot be changed.',
     // Session grouping and subagent continuation
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
     '个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。': ' subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).',

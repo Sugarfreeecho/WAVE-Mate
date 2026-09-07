@@ -242,6 +242,9 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '是否允许 Agent 执行此操作？': 'Allow Agent to perform this action?', '工具': 'Tool', '始终允许': 'Always allow', '本次允许': 'Allow this time',
     '允许一次': 'Allow once', '本任务内允许相同请求': 'Allow identical requests in this task', '始终允许此类操作': 'Always allow this kind of operation', '拒绝执行': 'Deny execution', '已取消': 'Cancelled', '该请求已取消。': 'This request was cancelled.', '该请求已过期。': 'This request expired.',
     '你已拒绝本次操作。': 'You denied this action.', '你已允许同类操作。': 'You allowed similar actions.', '你已允许本次操作。': 'You allowed this action.', '已回答': 'Answered', '未回答': 'Not answered',
+    '展开或收起完整请求': 'Expand or collapse the full request',
+    '此请求已处理，仅供查看，无法再次操作。': 'This request has been processed. It is read-only and cannot be changed.',
+    '此请求已结束，仅供查看，无法再次操作。': 'This request has ended. It is read-only and cannot be changed.',
     // Session grouping and subagent continuation
     '刷新归档目录': 'Refresh archived sessions', '加载归档目录': 'Load archived sessions', '加载更多': 'Load more', '加载中...': 'Loading...',
     '个子任务已完成，点击继续让主 Agent 综合子任务结果（不会自动续跑）。': ' subtasks completed. Click continue to let the main Agent synthesize their results (no automatic continuation).',
@@ -15754,6 +15757,30 @@ function appendHumanCardHeader(card, record, kind) {
     card.appendChild(head);
 }
 
+function applyHumanQuestionTerminalAnswers(card, record) {
+    var answersByQuestion = Object.create(null);
+    (Array.isArray(record.answers) ? record.answers : []).forEach(function (answer) {
+        answersByQuestion[String(answer.question_id || '')] = answer;
+    });
+    card.querySelectorAll('.human-question-pane').forEach(function (pane) {
+        var answer = answersByQuestion[String(pane.dataset.questionId || '')] || {};
+        var selectedIds = (answer.selected_option_ids || []).map(String);
+        var selectedLabels = (answer.selected_labels || []).map(String);
+        pane.querySelectorAll('input[data-option-id]').forEach(function (input) {
+            var label = input.closest('.human-option');
+            var labelText = label && label.querySelector('.human-option-label');
+            input.checked = selectedIds.indexOf(String(input.dataset.optionId || '')) >= 0
+                || (!selectedIds.length && selectedLabels.indexOf(String((labelText && labelText.textContent) || '')) >= 0);
+        });
+        var otherText = String(answer.other_text || '');
+        var otherMark = pane.querySelector('.human-other-mark');
+        var otherInput = pane.querySelector('.human-other-input');
+        if (otherMark) otherMark.checked = !!otherText;
+        if (otherInput) otherInput.value = otherText;
+        pane.dataset.skipped = answer.skipped ? '1' : '0';
+    });
+}
+
 function humanQuestionPaneState(pane) {
     var selected = Array.from(pane.querySelectorAll('input[data-option-id]:checked'));
     var otherMark = pane.querySelector('.human-other-mark');
@@ -15860,8 +15887,10 @@ function setHumanQuestionStep(card, index) {
     if (card.dataset.draftReady === '1') persistHumanInteractionDraft(card);
 }
 
-function createHumanQuestionCard(record, sessionId) {
-    var card = humanElement('article', 'human-interaction-card human-question-card');
+function createHumanQuestionCard(record, sessionId, options) {
+    options = options || {};
+    var readonly = !!options.readonly;
+    var card = humanElement('article', 'human-interaction-card human-question-card' + (readonly ? ' is-readonly' : ''));
     card.dataset.kind = 'question';
     card.dataset.sessionId = sessionId;
     card.dataset.interactionId = String(record.interaction_id || '');
@@ -15878,6 +15907,10 @@ function createHumanQuestionCard(record, sessionId) {
             tab.setAttribute('role', 'tab');
             tab.setAttribute('aria-controls', 'human-pane-' + record.interaction_id + '-' + index);
             tab.addEventListener('click', function () {
+                if (readonly) {
+                    setHumanQuestionStep(card, index);
+                    return;
+                }
                 var current = Number(card.dataset.step || 0);
                 if (index > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;
                 setHumanQuestionStep(card, index);
@@ -15888,7 +15921,7 @@ function createHumanQuestionCard(record, sessionId) {
                 var target = index + (event.key === 'ArrowRight' ? 1 : -1);
                 target = Math.max(0, Math.min(target, questions.length - 1));
                 var current = Number(card.dataset.step || 0);
-                if (target > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;
+                if (!readonly && target > current && !validateHumanQuestionPane(card, card.querySelectorAll('.human-question-pane')[current])) return;
                 setHumanQuestionStep(card, target);
                 var targetTab = card.querySelectorAll('.human-question-tab')[target];
                 if (targetTab) targetTab.focus();
@@ -16010,6 +16043,14 @@ function createHumanQuestionCard(record, sessionId) {
     actions.appendChild(skip);
     actions.appendChild(nav);
     card.appendChild(actions);
+    if (readonly) {
+        applyHumanQuestionTerminalAnswers(card, record);
+        setHumanQuestionStep(card, 0);
+        card.querySelectorAll('input, textarea, .human-card-actions button').forEach(function (control) {
+            control.disabled = true;
+        });
+        return card;
+    }
     var draft = restoreHumanInteractionDraft(card);
     setHumanQuestionStep(card, draft && Number.isFinite(Number(draft.step)) ? Number(draft.step) : 0);
     card.dataset.draftReady = '1';
@@ -16114,11 +16155,15 @@ function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
     }
 }
 
-function createHumanApprovalCard(record, sessionId) {
+function createHumanApprovalCard(record, sessionId, options) {
+    options = options || {};
+    var readonly = !!options.readonly;
     var danger = record.approval_level === 'danger';
     var forced = !!record.force_approval;
     var workspaceApproval = !forced && !!record.external_workspace_grantable;
-    var card = humanElement('article', 'human-interaction-card human-approval-card' + (danger ? ' is-danger' : ''));
+    var card = humanElement('article', 'human-interaction-card human-approval-card'
+        + (danger ? ' is-danger' : '')
+        + (readonly ? ' is-readonly' : ''));
     card.dataset.kind = 'approval';
     card.dataset.sessionId = sessionId;
     card.dataset.interactionId = String(record.approval_id || '');
@@ -16278,6 +16323,25 @@ function createHumanApprovalCard(record, sessionId) {
     decisions.appendChild(allow);
     actions.appendChild(decisions);
     card.appendChild(actions);
+    if (readonly) {
+        rejectionInput.disabled = true;
+        if (record.decision === 'deny' && record.rejection_reason) {
+            rejectionInput.value = String(record.rejection_reason);
+            rejectionEditor.hidden = false;
+        }
+        card.querySelectorAll('.human-card-actions button').forEach(function (button) {
+            button.disabled = true;
+        });
+        var selectedButton = record.decision === 'deny'
+            ? deny
+            : ((record.decision === 'allow_always'
+                || record.decision === 'allow_session'
+                || record.decision === 'allow_external_workspace') ? always : allow);
+        if (selectedButton && record.decision) {
+            selectedButton.classList.add('is-selected');
+            selectedButton.setAttribute('aria-pressed', 'true');
+        }
+    }
     return card;
 }
 
@@ -16390,11 +16454,10 @@ async function resolveHumanApproval(card, decision, rejectionReason) {
 
 function createHumanTerminalCard(record, sessionId) {
     var kind = record.kind === 'approval' ? 'approval' : 'question';
-    var card = humanElement('article', 'human-interaction-card is-terminal');
-    card.dataset.kind = kind;
-    card.dataset.sessionId = sessionId;
-    card.dataset.interactionId = String(kind === 'approval' ? record.approval_id : record.interaction_id);
-    appendHumanCardHeader(card, record, kind);
+    var card = kind === 'approval'
+        ? createHumanApprovalCard(record, sessionId, { readonly: true })
+        : createHumanQuestionCard(record, sessionId, { readonly: true });
+    card.classList.add('is-terminal', 'is-readonly', 'is-collapsed');
     var summary = humanElement('div', 'human-terminal-summary');
     if (record.status === 'cancelled') {
         summary.textContent = record.reason || '该请求已取消。';
@@ -16437,7 +16500,39 @@ function createHumanTerminalCard(record, sessionId) {
             summary.appendChild(line);
         });
     }
+    var head = card.querySelector('.human-card-head');
+    var detail = humanElement('div', 'human-terminal-detail');
+    var detailId = 'human-terminal-detail-' + kind + '-' + String(card.dataset.interactionId || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+    detail.id = detailId;
+    detail.hidden = true;
+    detail.appendChild(humanElement(
+        'div',
+        'human-readonly-notice',
+        record.status === 'resolved'
+            ? '此请求已处理，仅供查看，无法再次操作。'
+            : '此请求已结束，仅供查看，无法再次操作。'
+    ));
+    while (head && head.nextSibling) detail.appendChild(head.nextSibling);
     card.appendChild(summary);
+    card.appendChild(detail);
+    if (head) {
+        var toggle = humanElement('button', 'human-terminal-toggle', '展开');
+        toggle.type = 'button';
+        toggle.title = '展开或收起完整请求';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.setAttribute('aria-controls', detailId);
+        toggle.addEventListener('click', function () {
+            var expanded = toggle.getAttribute('aria-expanded') !== 'true';
+            toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            if (typeof setUiRuntimeText === 'function') setUiRuntimeText(toggle, expanded ? '收起' : '展开');
+            else toggle.textContent = expanded ? '收起' : '展开';
+            summary.hidden = expanded;
+            detail.hidden = !expanded;
+            card.classList.toggle('is-expanded', expanded);
+            card.classList.toggle('is-collapsed', !expanded);
+        });
+        head.appendChild(toggle);
+    }
     return card;
 }
 
