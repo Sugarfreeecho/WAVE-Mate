@@ -1121,6 +1121,9 @@ function bindProcessAggregateInteractions(agg) {
             agg.classList.toggle('is-collapsed');
             const expanded = !agg.classList.contains('is-collapsed');
             top.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            document.dispatchEvent(new CustomEvent('myagent:process-aggregate-toggle', {
+                detail: { aggregate: agg, expanded: expanded },
+            }));
             if (agg.classList.contains('is-collapsed')) {
                 updateProcessBrief(agg);
             } else {
@@ -4100,6 +4103,20 @@ function formatToolDoneLine(tool, args, result, commandPreview) {
     return formatToolCommandLine(tool, args, commandPreview) + '\n执行结果\n' + String(result != null ? result : '');
 }
 
+function rootSessionIdForRenderedNode(row, runSessionId) {
+    if (row && row.closest) {
+        var grid = row.closest('#subagent-grid[data-session-id]');
+        if (grid && grid.dataset.sessionId) return String(grid.dataset.sessionId);
+        var stream = row.closest('.chat-stream');
+        if (stream) {
+            var owner = String(stream.dataset.sessionId || stream.dataset.cacheSessionId || '');
+            if (owner) return owner;
+            if (stream.id === 'chat-stream' && currentSessionId) return String(currentSessionId);
+        }
+    }
+    return String(runSessionId || currentSessionId || '');
+}
+
 function appendToolPendingRow(ctx, parsed, runSessionId) {
     var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);
     var so = null;
@@ -4178,6 +4195,7 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';
     var text = rawContent ? rawContent : formatToolDoneLine(parsed.tool, parsed.args, parsed.result, cmdPreview);
     if (row) {
+        row._toolCallEvent = parsed;
         if (tid) row.setAttribute('data-tool-call-id', tid);
         row.removeAttribute('data-tool-draft-key');
         row.removeAttribute('data-tool-pending');
@@ -4198,6 +4216,15 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
             attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
         }
         autoCollapseToolRowAfterResult(row);
+        document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {
+            detail: {
+                event: parsed,
+                row: row,
+                aggregate: body && body.closest ? body.closest('.process-aggregate') : null,
+                sessionId: runSessionId || currentSessionId || '',
+                rootSessionId: rootSessionIdForRenderedNode(row, runSessionId),
+            },
+        }));
         return;
     }
     var ri = uiEventReactIter(parsed);
@@ -4208,7 +4235,19 @@ function upsertToolCallResult(ctx, parsed, runSessionId) {
     if (newRow && tid && typeof attachHumanInteractionCardsForToolCall === 'function') {
         attachHumanInteractionCardsForToolCall(ctx && ctx.stream, tid);
     }
-    if (newRow) autoCollapseToolRowAfterResult(newRow);
+    if (newRow) {
+        newRow._toolCallEvent = parsed;
+        autoCollapseToolRowAfterResult(newRow);
+        document.dispatchEvent(new CustomEvent('myagent:tool-call-rendered', {
+            detail: {
+                event: parsed,
+                row: newRow,
+                aggregate: body && body.closest ? body.closest('.process-aggregate') : null,
+                sessionId: runSessionId || currentSessionId || '',
+                rootSessionId: rootSessionIdForRenderedNode(newRow, runSessionId),
+            },
+        }));
+    }
 }
 
 function autoCollapseToolRowAfterResult(row) {

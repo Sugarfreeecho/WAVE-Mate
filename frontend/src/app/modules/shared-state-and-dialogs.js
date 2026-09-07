@@ -560,6 +560,10 @@ function openUiModal(options) {
     });
 }
 
+// Trusted chat extensions use the same accessible confirmation surface as the
+// built-in UI. Only the host controls which bundled modules can load in-page.
+globalThis.openMyAgentUiModal = openUiModal;
+
 function showUiAlert(opts) {
     var o = opts || {};
     var root = document.getElementById('ui-modal-root');

@@ -21,6 +21,7 @@ _MAX_PANEL_ACTIONS = 4
 _MAX_ACTION_INPUTS = 8
 _MAX_SETTINGS_SECTIONS = 16
 _MAX_COMPOSER_ACTIONS = 16
+_MAX_CHAT_EXTENSIONS = 16
 _MAX_RENDERER_FIELDS = 12
 _MAX_LIST_COLUMNS = 4
 _MAX_LIST_ITEMS = 100
@@ -614,6 +615,26 @@ def plugin_ui_contributions(plugin: PluginDefinition) -> Tuple[Dict[str, Any], .
         if actions:
             contribution["actions"] = actions
         out.append(contribution)
+
+    for raw in _slot_rows(raw_ui, "chat.extension", "chat_extensions", _MAX_CHAT_EXTENSIONS):
+        contribution_id = str(raw.get("id") or "").strip()
+        key = ("chat.extension", contribution_id)
+        renderer = _trusted_panel_renderer(plugin, raw.get("renderer"))
+        if (
+            not _CONTRIBUTION_ID_RE.fullmatch(contribution_id)
+            or key in seen
+            or renderer is None
+        ):
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "id": contribution_id,
+                "plugin_id": plugin.plugin_id,
+                "slot": "chat.extension",
+                "renderer": renderer,
+            }
+        )
     return tuple(out)
 
 

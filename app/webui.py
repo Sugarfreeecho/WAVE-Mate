@@ -1590,9 +1590,31 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
 # The sidebar polls /sessions/state every few seconds.  A rebuild walks all
 # sessions (seconds on a busy disk) and a burst of polls then starves real
 # work like message startup, so serve a short-TTL snapshot in between.
-_SESSIONS_STATE_TTL_SEC = 2.0
-_sessions_state_cache: dict = {"key": None, "ts": 0.0, "payload": None}
+_SESSIONS_STATE_TTL_SEC = 5.0
+_sessions_state_cache: dict = {
+    False: {"ts": 0.0, "payload": None},
+    True: {"ts": 0.0, "payload": None},
+}
 _sessions_state_cache_lock = threading.Lock()
+_sessions_state_build_locks = {False: threading.Lock(), True: threading.Lock()}
+_sessions_state_refreshing: set[bool] = set()
+
+
+def _refresh_sessions_state_cache(key: bool) -> None:
+    import time as _time
+
+    try:
+        payload = _build_sessions_state_snapshot(include_archived=key)
+        with _sessions_state_cache_lock:
+            _sessions_state_cache[key] = {
+                "ts": _time.monotonic(),
+                "payload": payload,
+            }
+    except Exception:
+        logger.exception("Background /sessions/state refresh failed")
+    finally:
+        with _sessions_state_cache_lock:
+            _sessions_state_refreshing.discard(key)
 
 
 def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dict:
@@ -1601,18 +1623,41 @@ def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dic
     now = _time.monotonic()
     key = bool(include_archived)
     with _sessions_state_cache_lock:
-        cached = _sessions_state_cache
+        cached = _sessions_state_cache[key]
         if (
             cached["payload"] is not None
-            and cached["key"] == key
             and now - float(cached["ts"] or 0.0) < _SESSIONS_STATE_TTL_SEC
         ):
             return cached["payload"]
-    payload = _build_sessions_state_snapshot(include_archived=include_archived)
-    with _sessions_state_cache_lock:
-        if now >= float(cached["ts"] or 0.0):
-            cached.update({"key": key, "ts": now, "payload": payload})
-    return payload
+        # Once a snapshot exists, never make a polling browser wait for the
+        # next disk scan. One daemon refreshes it while every concurrent caller
+        # receives the stale-but-complete value, preventing refresh stampedes.
+        if cached["payload"] is not None:
+            if key not in _sessions_state_refreshing:
+                _sessions_state_refreshing.add(key)
+                threading.Thread(
+                    target=_refresh_sessions_state_cache,
+                    args=(key,),
+                    name=f"sessions-state-refresh-{int(key)}",
+                    daemon=True,
+                ).start()
+            return cached["payload"]
+
+    # The first request has no stale value to serve. Serialize that cold build
+    # per include_archived variant, then re-check in case another request won.
+    build_lock = _sessions_state_build_locks[key]
+    with build_lock:
+        with _sessions_state_cache_lock:
+            cached = _sessions_state_cache[key]
+            if cached["payload"] is not None:
+                return cached["payload"]
+        payload = _build_sessions_state_snapshot(include_archived=key)
+        with _sessions_state_cache_lock:
+            _sessions_state_cache[key] = {
+                "ts": _time.monotonic(),
+                "payload": payload,
+            }
+        return payload
 
 def get_index_html():
     """读取并返回 Vite 构建产物 templates/dist/index.html。"""
@@ -6116,6 +6161,12 @@ async def truncate_session_events(
             content={"ok": False, "error": "truncation failed"},
             status_code=400,
         )
+    try:
+        from workflow_extensions import session_workflows
+
+        await asyncio.to_thread(session_workflows.call, "history_truncated", session_id)
+    except Exception:
+        logger.warning("history truncation plugin callback failed for %s", session_id, exc_info=True)
     # The user just deleted the tail of the history (typically the leftover of
     # an interrupted run). Acknowledge stale failed/interrupted runs so the
     # runtime indicator stops alerting on them.
@@ -6162,6 +6213,17 @@ async def branch_session_events(
             content=result,
             status_code=400,
         )
+    try:
+        from workflow_extensions import session_workflows
+
+        await asyncio.to_thread(
+            session_workflows.call,
+            "session_branched",
+            session_id,
+            str(result.get("session_id") or ""),
+        )
+    except Exception:
+        logger.warning("branch plugin callback failed for %s", session_id, exc_info=True)
     return JSONResponse(content={"ok": True, **result})
 
 

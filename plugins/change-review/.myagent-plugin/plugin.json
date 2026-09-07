@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "change-review",
+  "name": "Change Review",
+  "version": "1.0.0",
+  "system_builtin": true,
+  "description": "Review line-level file changes and safely undo them.",
+  "capabilities": {
+    "trusted_host": {"entry": "host.py", "workflow_runtime": "runtime.py"},
+    "web": {"assets": "web"},
+    "ui": {
+      "chat.extension": [{
+        "id": "change-review",
+        "renderer": {"module": "change-review.js", "style": "change-review.css"}
+      }]
+    }
+  }
+}

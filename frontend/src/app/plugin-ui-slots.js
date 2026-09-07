@@ -16,6 +16,64 @@ let sessionUiLatestGeneration = new Map();
 let pluginSessionUiCache = new Map();
 let pluginSessionPanelRenderers = new Map();
 let pluginSessionPanelCleanups = [];
+let pluginChatExtensionCleanups = [];
+
+export function normalizePluginChatExtensions(rows) {
+    if (!Array.isArray(rows)) return [];
+    const seen = new Set();
+    return rows.slice(0, 64).flatMap(function (raw) {
+        if (!raw || typeof raw !== 'object' || raw.slot !== 'chat.extension'
+            || !raw.renderer || typeof raw.renderer !== 'object') return [];
+        const pluginId = String(raw.plugin_id || '').trim();
+        const id = String(raw.id || '').trim();
+        const moduleUrl = String(raw.renderer.module || '').trim();
+        const styleUrl = String(raw.renderer.style || '').trim();
+        const prefix = `/plugin-assets/${pluginId}/`;
+        const safeUrl = function (value, suffixes) {
+            if (!value || !value.startsWith(prefix) || value.includes('..') || value.includes('\\')) return false;
+            const path = value.split('?', 1)[0].toLowerCase();
+            return suffixes.some(function (suffix) { return path.endsWith(suffix); });
+        };
+        const key = `${pluginId}:${id}`;
+        if (!PLUGIN_ID_PATTERN.test(pluginId) || !CONTRIBUTION_ID_PATTERN.test(id)
+            || !safeUrl(moduleUrl, ['.js', '.mjs'])
+            || (styleUrl && !safeUrl(styleUrl, ['.css'])) || seen.has(key)) return [];
+        seen.add(key);
+        return [{ pluginId, id, moduleUrl, styleUrl }];
+    });
+}
+
+async function loadPluginChatExtensions(rows) {
+    pluginChatExtensionCleanups.splice(0).forEach(function (cleanup) {
+        try { cleanup(); } catch (error) { console.warn('Plugin chat extension cleanup failed', error); }
+    });
+    const definitions = normalizePluginChatExtensions(rows);
+    await Promise.all(definitions.map(async function (definition) {
+        try {
+            if (definition.styleUrl && !document.querySelector(`link[data-plugin-chat-style="${definition.pluginId}:${definition.id}"]`)) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = definition.styleUrl;
+                link.dataset.pluginChatStyle = `${definition.pluginId}:${definition.id}`;
+                document.head.appendChild(link);
+            }
+            const module = await import(/* @vite-ignore */ definition.moduleUrl);
+            if (!module || typeof module.installChatExtension !== 'function') return;
+            const cleanup = await module.installChatExtension({
+                pluginId: definition.pluginId,
+                id: definition.id,
+                request: sessionUiRequest,
+                translate: function (value) {
+                    return typeof globalThis.translateUiString === 'function'
+                        ? globalThis.translateUiString(value) : value;
+                },
+            });
+            if (typeof cleanup === 'function') pluginChatExtensionCleanups.push(cleanup);
+        } catch (error) {
+            console.warn(`Plugin chat extension failed to load (${definition.pluginId})`, error);
+        }
+    }));
+}
 
 export function normalizePluginSessionPanelRenderers(rows) {
     if (!Array.isArray(rows)) return [];
@@ -1076,11 +1134,13 @@ export async function initPluginUiSlots(options = {}) {
         renderPluginSettingsSections(document.getElementById('plugin-settings-sections'), contributions);
         renderPluginComposerActions(document.getElementById('plugin-composer-actions'), contributions);
         await loadPluginSessionPanelRenderers(contributions);
+        await loadPluginChatExtensions(contributions);
         initPluginSessionUi();
     } catch (error) {
         installPluginUiContributions([]);
         renderPluginSettingsSections(document.getElementById('plugin-settings-sections'), []);
         renderPluginComposerActions(document.getElementById('plugin-composer-actions'), []);
+        await loadPluginChatExtensions([]);
         console.warn('Plugin UI discovery failed', error);
     } finally {
         document.dispatchEvent(new CustomEvent('myagent:plugin-ui-ready'));

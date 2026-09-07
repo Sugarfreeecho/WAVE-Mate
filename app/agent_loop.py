@@ -3858,6 +3858,7 @@ async def _emit_tool_call_sse(
                 "tool_call_id": res.get("tool_id") or "",
                 "tool_call_index": res.get("tool_call_index"),
                 "react_iter": int(react_iter),
+                "ui": redact_sensitive_tool_obj(res.get("ui") or {}),
             }
         )
         if inspect.isawaitable(r):
@@ -5630,6 +5631,9 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                 tool_func = tools_dict.get(tool_name)
                 tool_failed = False
                 tool_invoke_started = time.perf_counter()
+                change_review_capture = None
+                change_review_changes = []
+                change_review_tool_failed = False
                 if not tool_func:
                     result = f"未知工具：{tool_name}"
                     tool_failed = True
@@ -5671,27 +5675,61 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                                 decision=sec_decision,
                                 workspace=security_workspace,
                             ):
-                                if hasattr(tool_func, "ainvoke"):
-                                    result = await _await_steerable(
+                                try:
+                                    change_review_capture = _workflow_callbacks().call(
+                                        "before_native_file_tool",
                                         state,
-                                        tool_func.ainvoke(tool_args),
-                                        emit,
-                                        "tool",
+                                        tool_name,
+                                        tool_args,
+                                        tool_id,
+                                        worktree_root,
                                     )
-                                elif hasattr(tool_func, "invoke"):
-                                    result = await _await_steerable(
-                                        state,
-                                        asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
-                                        emit,
-                                        "tool",
+                                except Exception:
+                                    logger.warning(
+                                        "change review pre-tool snapshot failed for %s",
+                                        tool_name,
+                                        exc_info=True,
                                     )
-                                else:
-                                    result = await _await_steerable(
-                                        state,
-                                        _invoke_plain_tool(tool_func, tool_args),
-                                        emit,
-                                        "tool",
-                                    )
+                                try:
+                                    if hasattr(tool_func, "ainvoke"):
+                                        result = await _await_steerable(
+                                            state,
+                                            tool_func.ainvoke(tool_args),
+                                            emit,
+                                            "tool",
+                                        )
+                                    elif hasattr(tool_func, "invoke"):
+                                        result = await _await_steerable(
+                                            state,
+                                            asyncio.to_thread(lambda: tool_func.invoke(tool_args)),
+                                            emit,
+                                            "tool",
+                                        )
+                                    else:
+                                        result = await _await_steerable(
+                                            state,
+                                            _invoke_plain_tool(tool_func, tool_args),
+                                            emit,
+                                            "tool",
+                                        )
+                                except BaseException:
+                                    change_review_tool_failed = True
+                                    raise
+                                finally:
+                                    if change_review_capture is not None:
+                                        try:
+                                            change_review_changes = _workflow_callbacks().call(
+                                                "after_native_file_tool",
+                                                state,
+                                                change_review_capture,
+                                                not change_review_tool_failed,
+                                            ) or []
+                                        except Exception:
+                                            logger.warning(
+                                                "change review post-tool snapshot failed for %s",
+                                                tool_name,
+                                                exc_info=True,
+                                            )
                     except _SteerRestartRequested:
                         raise
                     except Exception as e:
@@ -5728,6 +5766,10 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     ),
                 )
                 response["tool_status"]["duration_ms"] = tool_invoke_ms
+                if change_review_changes:
+                    # UI-only metadata: model history reads the original result
+                    # fields and never consumes this plugin-owned value.
+                    response["ui"] = {"changes": change_review_changes}
                 return response
 
 
@@ -7691,6 +7733,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             "tool_call_id": res.get("tool_id") or "",
                             "tool_call_index": res.get("tool_call_index"),
                             "react_iter": int(iter_count),
+                            "ui": redact_sensitive_tool_obj(res.get("ui") or {}),
                         })
                         if inspect.isawaitable(r):
                             await r

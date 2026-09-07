@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1289,6 +1290,54 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     }
     assert payload["active_runs"][0]["session_id"] == "s1"
     assert payload["active_runs"][0]["lightweight"] is True
+
+
+def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(monkeypatch):
+    import webui
+
+    calls = []
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def build(include_archived=False):
+        calls.append(bool(include_archived))
+        if len(calls) > 1:
+            refresh_started.set()
+            assert release_refresh.wait(2)
+        return {"seq": len(calls), "sessions": []}
+
+    monkeypatch.setattr(webui, "_build_sessions_state_snapshot", build)
+    monkeypatch.setattr(webui, "_SESSIONS_STATE_TTL_SEC", 0.001)
+    with webui._sessions_state_cache_lock:
+        webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
+        webui._sessions_state_refreshing.discard(False)
+
+    try:
+        first = webui._build_sessions_state_snapshot_cached(False)
+        time.sleep(0.01)
+        second = webui._build_sessions_state_snapshot_cached(False)
+        assert refresh_started.wait(1)
+        third = webui._build_sessions_state_snapshot_cached(False)
+
+        assert first["seq"] == 1
+        assert second is first
+        assert third is first
+        assert calls == [False, False]
+
+        release_refresh.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with webui._sessions_state_cache_lock:
+                refreshed = webui._sessions_state_cache[False]["payload"]
+            if refreshed and refreshed.get("seq") == 2:
+                break
+            time.sleep(0.01)
+        assert refreshed["seq"] == 2
+    finally:
+        release_refresh.set()
+        with webui._sessions_state_cache_lock:
+            webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
+            webui._sessions_state_refreshing.discard(False)
 
 
 def test_sessions_state_includes_pending_human_interaction_counts(monkeypatch, tmp_path):

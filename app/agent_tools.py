@@ -1996,7 +1996,11 @@ def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> Non
     """原子写入：先写临时文件，再原子替换目标文件。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(temp_path, "w", encoding=encoding) as f:
+    # Keep the string's line endings byte-for-byte.  Python's default
+    # ``newline=None`` performs platform translation on Windows (LF -> CRLF),
+    # which turns a small apply_patch edit into a whole-file review diff and
+    # needlessly changes files that were stored with LF endings.
+    with open(temp_path, "w", encoding=encoding, newline="") as f:
         f.write(content)
     os.replace(temp_path, path)
 

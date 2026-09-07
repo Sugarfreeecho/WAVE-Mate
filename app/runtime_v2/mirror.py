@@ -227,7 +227,14 @@ class RuntimeMirror:
         if event_type in {"subagent_started", "subagent_progress", "subagent_finished", "subagent_failed", "subagent_result_consumed"}:
             return {"type": event_type, "payload": self._slim_subagent_payload(event)}
         if event_type in {"tool_call", "tool_result"}:
-            mapped_type = "tool_finished" if event_type == "tool_result" else "tool_started"
+            # The legacy UI calls a completed row ``tool_call`` and includes
+            # its result. Preserve that historical shape in the UI projection,
+            # while recording the semantically correct Runtime V2 lifecycle.
+            mapped_type = (
+                "tool_finished"
+                if event_type == "tool_result" or "result" in event
+                else "tool_started"
+            )
             return {
                 "type": mapped_type,
                 "payload": self._externalize_large_text_payload(

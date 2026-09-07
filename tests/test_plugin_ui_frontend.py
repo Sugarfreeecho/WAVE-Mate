@@ -32,6 +32,7 @@ def test_plugin_ui_slot_frontend_runtime_and_safe_text_rendering():
     assert "button.textContent = item.label" in source
     assert "innerHTML" not in source
     assert "normalizePluginSessionPanelRenderers" in source
+    assert "normalizePluginChatExtensions" in source
     assert "import(/* @vite-ignore */ definition.moduleUrl)" in source
     assert "globalThis.fetch.bind(globalThis)" in source
     assert "String(raw.href || '') !== expectedHref" in source
@@ -45,6 +46,54 @@ def test_plugin_ui_slot_frontend_runtime_and_safe_text_rendering():
     assert "innerHTML" not in dispatcher.split("function applyPluginExtensionEventView", 1)[1].split(
         "function renderEvent", 1
     )[0]
+
+
+def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_rendering():
+    source = (ROOT / "plugins/change-review/web/change-review.js").read_text(encoding="utf-8")
+    styles = (ROOT / "plugins/change-review/web/change-review.css").read_text(encoding="utf-8")
+    message_rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(
+        encoding="utf-8"
+    )
+    event_dispatch = (ROOT / "frontend/src/app/modules/event-dispatch.js").read_text(
+        encoding="utf-8"
+    )
+    assert "installChatExtension" in source
+    assert "span.textContent = line" in source
+    assert "snapshot_ids" in source
+    assert "operation_id" in source
+    assert "myagent:tool-call-rendered" in source
+    assert "ResizeObserver" in source
+    assert "✏️" not in source
+    assert "subagent-card-title-row" in source
+    assert "change-review-view" in source
+    assert "switchSessionView" in source
+    assert "sessionObserver" in source
+    assert "aggregateSessionId" in source
+    assert "aggregateIsCurrent" in source
+    assert "rootSessionId" in source
+    assert "resetForSession(next)" in source
+    assert "document.getElementById('chat-stream')" in source
+    assert "root.querySelectorAll('.feed-item.feed--tool')" in source
+    assert "document.querySelectorAll('.feed-item.feed--tool')" not in source
+    assert "rootSessionIdForRenderedNode" in message_rendering
+    assert "rootSessionId: rootSessionIdForRenderedNode" in message_rendering
+    assert "rootSessionId: typeof rootSessionIdForRenderedNode" in event_dispatch
+    assert "document.querySelectorAll('.change-review-process-badge')" in source
+    assert "allowUndo: false" in source
+    assert "Only rescan when a real tool row was inserted" in source
+    assert "{ deferRender: true }" in source
+    assert "if (hasInsertedRows) scheduleScanExisting();" in source
+    assert "if (shouldRender) scheduleRender();" in source
+    assert "if (allowUndo) item.appendChild(body);" in source
+    assert "body.dataset.rendered === '1'" in source
+    assert "new ResizeObserver(function ()" in source
+    assert "scheduleScanExisting();" in source
+    assert "if (!options.deferRender) scheduleRender();" in source
+    assert "requestAnimationFrame" in source
+    assert ".diff-add" in styles and ".diff-remove" in styles
+    assert ".change-review-bar[hidden]" in styles
+    assert "change-review-stat-added" in styles and "change-review-stat-removed" in styles
+    assert "change-review" not in (ROOT / "frontend/index.html").read_text(encoding="utf-8")
 
 
 def test_plugin_navigation_host_is_removed_from_both_html_sources():

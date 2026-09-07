@@ -49,6 +49,16 @@ document.addEventListener('myagent:plugin-ui-ready', function () {
 function renderEvent(ctx, event, eventIndex, runSessionId) {
     if (!event || typeof event !== 'object') return;
     var eventSessionId = runSessionId || currentSessionId || '';
+    document.dispatchEvent(new CustomEvent('myagent:ui-event', {
+        detail: {
+            event: event,
+            eventIndex: eventIndex,
+            sessionId: eventSessionId,
+            rootSessionId: typeof rootSessionIdForRenderedNode === 'function'
+                ? rootSessionIdForRenderedNode(ctx && ctx.stream, eventSessionId)
+                : eventSessionId,
+        },
+    }));
     if (event.type === 'permission_mode_changed') {
         if (typeof renderPermissionMode === 'function') renderPermissionMode(event);
         return;

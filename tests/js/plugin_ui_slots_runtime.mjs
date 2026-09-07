@@ -6,10 +6,26 @@ import {
     normalizePluginComposerActions,
     normalizePluginSessionUiResponse,
     normalizePluginSessionPanelRenderers,
+    normalizePluginChatExtensions,
     normalizePluginSettingsSections,
     normalizePluginSettingsResponse,
     resolvePluginExtensionEvent,
 } from '../../frontend/src/app/plugin-ui-slots.js';
+
+assert.deepEqual(normalizePluginChatExtensions([{
+    plugin_id: 'change-review', id: 'change-review', slot: 'chat.extension',
+    renderer: {
+        module: '/plugin-assets/change-review/change-review.js?v=abc',
+        style: '/plugin-assets/change-review/change-review.css?v=abc',
+    },
+}, {
+    plugin_id: 'evil', id: 'chat', slot: 'chat.extension',
+    renderer: { module: 'https://evil.example/chat.js' },
+}]), [{
+    pluginId: 'change-review', id: 'change-review',
+    moduleUrl: '/plugin-assets/change-review/change-review.js?v=abc',
+    styleUrl: '/plugin-assets/change-review/change-review.css?v=abc',
+}]);
 
 assert.deepEqual(normalizePluginSessionPanelRenderers([{
     plugin_id: 'session-todo', id: 'current-plan', slot: 'session.panel',
