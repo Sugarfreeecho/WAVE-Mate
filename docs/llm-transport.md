@@ -64,9 +64,13 @@ Responses 代理始终保持 HTTP/SSE，不会因为 SDK 存在 `responses.conne
 issuer 能力缓存中临时标记 WebSocket 不支持，timeout、429、鉴权错误和 5xx 不修改能力。
 连接在未读完响应时被取消会直接丢弃，避免残留帧污染下一轮。
 
-Executor facade 自己拥有候选模型切换，因此外层首-token hedge 不会并发复制整个候选循环；
-同一 Runtime V2 run 的失败模型熔断状态跨 executor 客户端的短 TTL 重建复用，模型切换状态
-只由一个逻辑请求发出。
+Executor facade 自己拥有候选模型切换，外层首-token hedge（agent_openai）仍会在
+`OPENAI_FIRST_TOKEN_HEDGE_TIMEOUT_SEC` 内无首 token 时并发复制整个逻辑请求（含候选循环），
+用于救援"既不失败也不吐字"的卡死连接；两路共享同一个 `_LogicalRequestBudget`，因此物理请求
+总数不会超过 `OPENAI_TOTAL_REQUEST_BUDGET` / `OPENAI_MAX_INFLIGHT_REQUESTS`，落败的 hedge
+流在胜者产生后被关闭、不会发出模型切换状态。同一 Runtime V2 run 的失败模型熔断状态跨
+executor 客户端的短 TTL 重建复用，模型切换状态只由胜出的那个逻辑请求发出。若需彻底关闭门面
+路径的 hedge，设 `OPENAI_HEDGE_MAX_ATTEMPTS=0`。
 
 ## Canonical item 与历史变更
 

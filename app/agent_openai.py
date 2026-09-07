@@ -2151,9 +2151,17 @@ def run_chat_completion_stream_worker(
         )
         attempt = 0
         hedges_used = 0
+        # The executor facade owns provider/model fallback inside each logical
+        # request, but the outer first-token hedge still protects the *whole*
+        # logical request against a stall (no first token, no error) that
+        # candidate fallback can never observe because nothing raised.  Both
+        # mechanisms share the same logical budget (_LogicalRequestBudget), so
+        # hedging the entire candidate loop cannot multiply physical requests
+        # beyond OPENAI_TOTAL_REQUEST_BUDGET / OPENAI_MAX_INFLIGHT_REQUESTS.
+        # Set OPENAI_HEDGE_MAX_ATTEMPTS=0 to disable hedge for a logical owner.
         first_token_hedge_limit = (
             0
-            if bool(getattr(client, "_myagent_logical_fallback_owner", False))
+            if OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES <= 0
             else OPENAI_FIRST_TOKEN_HEDGE_MAX_RETRIES
         )
         request_budget = recovery_budget or _LogicalRequestBudget()

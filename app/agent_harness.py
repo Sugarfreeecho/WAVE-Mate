@@ -1412,9 +1412,11 @@ class ExecutorLLMClient:
             else {}
         )
         self._last_successful_candidate_key = ""
-        # The facade, not the outer first-token race, owns provider/model
-        # fallback.  Launching several copies of this iterator would let every
-        # physical hedge switch models and emit duplicate status messages.
+        # Historical marker kept for duck-typing compatibility.  It no longer
+        # gates the first-token hedge: agent_openai applies the same hedge to
+        # every logical request (facade or bare client) and relies on
+        # _LogicalRequestBudget to cap physical duplicates.  Set
+        # OPENAI_HEDGE_MAX_ATTEMPTS=0 to disable hedging globally.
         self._myagent_logical_fallback_owner = True
         self._myagent_transport_enabled = bool(
             candidates and all(item.get("transport") is not None for item in candidates)
