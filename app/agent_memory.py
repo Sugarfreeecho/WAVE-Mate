@@ -865,8 +865,9 @@ def _compress_executor_tail_user_content(key_context_markdown: str) -> str:
     kc = (key_context_markdown or "").strip()
     ref = kc if kc else "（暂无已持久化要点；请仅从上方对话提炼。）"
     return (
-        "【你的任务】请读完上方的 user / assistant / tool 对话，并严格按对话最前面的 system 说明完成任务。\n\n"
-        "【已有要点摘录】（来自 key_context.md，供增量对照，勿堆砌重复）：\n\n"
+        "【你的任务】请读完上方的 user / assistant / tool 对话，并严格按对话最前面的 system 说明完成任务。\n"
+        "本次不是从零概括，而是在下面【上次压缩已有要点】的基础上做增量刷新：继承仍有效的、用新对话覆写已变化的、只删除确认过期的。\n\n"
+        "【上次压缩已有要点】（来自 key_context.md，是刷新基线；新输出须继承其中仍有效的条目并去重合并，勿整段照抄）：\n\n"
         + ref
     )
 
