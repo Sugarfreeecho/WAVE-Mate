@@ -21,31 +21,29 @@ from .security import PluginSecurityError
 
 
 _BUNDLED_ROOT = Path(__file__).resolve().parents[2] / "plugins"
-_BUNDLED_TRUSTED_HOST_PLUGIN_IDS = frozenset(
-    {
-        "agent-goal",
-        "agent-team",
-        "desktop-notifications",
-        "feishu-transport",
-        "session-todo",
-        "web-search-providers",
-    }
-)
 _MODULES: dict[tuple[str, str], ModuleType] = {}
 _INSTALLED: set[tuple[int, str, str]] = set()
 _STARTED: list[tuple[PluginDefinition, ModuleType]] = []
 
 
 def is_bundled_trusted_host_plugin(plugin: PluginDefinition) -> bool:
-    """Return whether host policy, not plugin metadata, grants in-process trust."""
+    """Return whether a native plugin is installed directly under ``plugins/``.
 
-    if plugin.plugin_id not in _BUNDLED_TRUSTED_HOST_PLUGIN_IDS:
-        return False
+    The bundled directory is the host-controlled trust boundary.  Requiring the
+    resolved root to be exactly ``plugins/<plugin id>`` prevents manifests from
+    granting in-process trust to plugins discovered from user or nested paths,
+    while allowing newly bundled plugin directories without a second allowlist.
+    """
+
     if plugin.source_format != "native":
         return False
     try:
-        return plugin.root.resolve() == (_BUNDLED_ROOT / plugin.plugin_id).resolve()
-    except (OSError, RuntimeError):
+        bundled_root = _BUNDLED_ROOT.resolve(strict=True)
+        root = plugin.root.resolve(strict=True)
+        expected_root = (_BUNDLED_ROOT / plugin.plugin_id).resolve(strict=True)
+        root.relative_to(bundled_root)
+        return root.is_dir() and root == expected_root
+    except (OSError, RuntimeError, ValueError):
         return False
 
 
@@ -66,7 +64,8 @@ def _host_entry(plugin: PluginDefinition) -> Path | None:
         ) from exc
     if not is_bundled_trusted_host_plugin(plugin):
         raise PluginSecurityError(
-            f"Plugin {plugin.plugin_id!r} is not on the bundled trusted_host allowlist"
+            f"Plugin {plugin.plugin_id!r} is not installed at "
+            f"plugins/{plugin.plugin_id} under the bundled root"
         )
     candidate = (root / entry).resolve()
     try:
@@ -99,7 +98,7 @@ def _module(plugin: PluginDefinition) -> ModuleType | None:
 
 
 def bundled_host_plugin_enabled(plugin_id: str) -> bool:
-    """Return live enablement for an allowlisted bundled host extension."""
+    """Return live enablement for a bundled host extension."""
 
     try:
         from .manager import get_plugin_manager, plugins_enabled

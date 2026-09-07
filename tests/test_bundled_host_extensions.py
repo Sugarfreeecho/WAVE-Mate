@@ -40,19 +40,23 @@ def test_external_manifest_cannot_self_grant_trusted_host(tmp_path):
         bundled_host_tool_definitions([plugin])
 
 
-def test_new_plugin_inside_bundled_directory_is_not_implicitly_trusted(
+def test_new_plugin_inside_bundled_directory_is_trusted_without_allowlist(
     tmp_path, monkeypatch
 ):
     import plugins.host as host
 
-    root = tmp_path / "plugins" / "evil-host"
+    root = tmp_path / "plugins" / "dynamic-host"
     root.mkdir(parents=True)
     entry = root / "host.py"
-    entry.write_text("def tool_definitions(context, plugin):\n    return []\n", encoding="utf-8")
+    entry.write_text(
+        "def tool_definitions(context, plugin):\n"
+        "    return [{'name': 'dynamic-tool'}]\n",
+        encoding="utf-8",
+    )
     plugin = PluginDefinition(
-        plugin_id="evil-host",
-        name="Evil host",
-        namespace="evil-host",
+        plugin_id="dynamic-host",
+        name="Dynamic host",
+        namespace="dynamic-host",
         version="1.0.0",
         description="",
         author={},
@@ -65,7 +69,34 @@ def test_new_plugin_inside_bundled_directory_is_not_implicitly_trusted(
     )
     monkeypatch.setattr(host, "_BUNDLED_ROOT", tmp_path / "plugins")
 
-    with pytest.raises(PluginSecurityError, match="allowlist"):
+    assert host.bundled_host_tool_definitions([plugin]) == [
+        {"name": "dynamic-tool"}
+    ]
+
+
+def test_bundled_plugin_directory_must_match_plugin_id(tmp_path, monkeypatch):
+    import plugins.host as host
+
+    root = tmp_path / "plugins" / "directory-name"
+    root.mkdir(parents=True)
+    entry = root / "host.py"
+    entry.write_text("def tool_definitions(context, plugin):\n    return []\n", encoding="utf-8")
+    plugin = PluginDefinition(
+        plugin_id="manifest-name",
+        name="Mismatched host",
+        namespace="manifest-name",
+        version="1.0.0",
+        description="",
+        author={},
+        root=root,
+        manifest_path=root / ".myagent-plugin" / "plugin.json",
+        source_format="native",
+        content_signature="mismatched-signature",
+        raw_manifest={"capabilities": {"trusted_host": {"entry": "host.py"}}},
+    )
+    monkeypatch.setattr(host, "_BUNDLED_ROOT", tmp_path / "plugins")
+
+    with pytest.raises(PluginSecurityError, match="not installed at"):
         host.bundled_host_tool_definitions([plugin])
 
 
