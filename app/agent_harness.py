@@ -5917,7 +5917,9 @@ class SessionManager:
                 except Exception:
                     pass
         if session_id is None:
+            create_started = time.perf_counter()
             session_id = str(uuid.uuid4())
+            uuid_ready = time.perf_counter()
             work_messages: List[dict] = []
             llm_history = []           # 新会话 llm_history 为空
             key_context = ""
@@ -5930,11 +5932,22 @@ class SessionManager:
                 "pinned": False,
                 "todo": False,
                 "goal_review_pending": False,
-                "authorized_dirs": [str(WORK_DIR.resolve())],
+                # WORK_DIR is already normalized by _env_path() during startup.
+                # Resolving it again on every click adds another filesystem call
+                # to a latency-sensitive path, which can have multi-second tail
+                # latency on Windows when the volume is busy or being scanned.
+                "authorized_dirs": [str(WORK_DIR)],
             }
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
-            self._save_metadata(session_id, metadata)
-            if self._runtime_v2_primary():
+            metadata_ready = time.perf_counter()
+            # A freshly generated UUID cannot be present in the deleted-session
+            # registry and has no concurrent metadata writer. Avoid the generic
+            # update path's repeated registry checks and per-session lock lookup.
+            self.repository.save_metadata_atomic(session_id, metadata)
+            self._set_interrupt_cache_from_metadata(session_id, metadata)
+            metadata_saved = time.perf_counter()
+            runtime_v2_primary = self._runtime_v2_primary()
+            if runtime_v2_primary:
                 from runtime_v2 import RuntimeHistoryOps
 
                 RuntimeHistoryOps(
@@ -5947,7 +5960,8 @@ class SessionManager:
                 self._save_key_context(session_id, key_context)
                 self._save_ui_events(session_id, [])
                 self._save_dialogue_history(session_id, [])
-            self.index.append({
+            history_initialized = time.perf_counter()
+            index_entry = {
                 "id": session_id,
                 "name": metadata["name"],
                 "created_at": metadata["created_at"],
@@ -5957,8 +5971,26 @@ class SessionManager:
                 "todo": bool(metadata.get("todo", False)),
                 "goal_review_pending": bool(metadata.get("goal_review_pending", False)),
                 "pinned_at": metadata.get("pinned_at") if metadata.get("pinned") else None,
-            })
-            self._save_index()
+            }
+            # create_session now runs outside the asyncio event loop. Protect
+            # append + persistence as one operation so simultaneous tabs cannot
+            # overwrite each other's newly-created index row.
+            with self._lock:
+                self.index.append(index_entry)
+                self.repository.save_index(self.index_file, self.index)
+            index_saved = time.perf_counter()
+            logger.info(
+                "create_session_timing session=%s total=%sms uuid=%sms metadata_prepare=%sms "
+                "metadata_write=%sms history_init=%sms index_write=%sms runtime_v2=%s",
+                session_id,
+                int((index_saved - create_started) * 1000),
+                int((uuid_ready - create_started) * 1000),
+                int((metadata_ready - uuid_ready) * 1000),
+                int((metadata_saved - metadata_ready) * 1000),
+                int((history_initialized - metadata_saved) * 1000),
+                int((index_saved - history_initialized) * 1000),
+                runtime_v2_primary,
+            )
             logger.info(f"创建新会话: {session_id}")
             return session_id, dialogue, work_messages, llm_history, key_context, metadata
         else:

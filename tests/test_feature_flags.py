@@ -957,6 +957,22 @@ def test_frontend_session_scoped_token_and_count_guards():
     assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
 
 
+def test_frontend_new_session_renders_immediately_and_coalesces_creation():
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+    body = sessions.split("async function createNewSession()", 1)[1]
+    body = body.split("async function createNewSessionInner()", 1)[1]
+
+    assert "let createNewSessionQueue = null;" in sessions
+    assert "if (createNewSessionQueue) return createNewSessionQueue;" in sessions
+    assert "if (newSessionBtn) newSessionBtn.disabled = true;" in sessions
+    assert "if (!response.ok) throw new Error('HTTP ' + response.status);" in body
+    assert body.index("setCurrentSessionState(null);") < body.index("await fetch('/sessions'")
+    assert body.index("setWelcome();") < body.index("await fetch('/sessions'")
+    assert "renderSessionListIfChanged(false);" in body
+    # setCurrentSessionState already refreshes the global permission selector.
+    assert "refreshPermissionModeSelector(currentSessionId)" not in body
+
+
 def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
     rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 

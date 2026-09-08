@@ -2997,8 +2997,13 @@ async def delete_subagent(parent_id: str, child_id: str):
 
 @fastapi_app.post("/sessions")
 async def create_session():
-    # get_or_create_session 现在返回6个值，我们只需要 session_id
-    session_id, _, _, _, _, metadata = session_manager.get_or_create_session()
+    started = time.perf_counter()
+    # Session creation performs several local filesystem writes. Keep those
+    # writes off the asyncio event loop so one slow Windows filesystem call
+    # cannot freeze heartbeats, streaming, and every other browser request.
+    session_id, _, _, _, _, metadata = await asyncio.to_thread(
+        session_manager.get_or_create_session
+    )
     session = {
         "id": session_id,
         "name": (metadata or {}).get("name") or "新会话",
@@ -3012,7 +3017,12 @@ async def create_session():
         "last_user_preview": "",
         "stream_active": False,
     }
-    return JSONResponse(content={"session_id": session_id, "session": session})
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    logger.info("create_session_endpoint_timing session=%s total=%sms", session_id, elapsed_ms)
+    return JSONResponse(
+        content={"session_id": session_id, "session": session},
+        headers={"Server-Timing": f"session-create;dur={elapsed_ms}"},
+    )
 
 
 def _model_profiles_response() -> dict:

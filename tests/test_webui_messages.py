@@ -144,6 +144,33 @@ def _json_response_payload(response) -> dict | list:
     return json.loads(response.body.decode("utf-8"))
 
 
+def test_create_session_moves_filesystem_work_off_event_loop(monkeypatch):
+    import webui
+
+    caller_thread = threading.get_ident()
+    observed = {}
+
+    class _CreateManager:
+        def get_or_create_session(self):
+            observed["thread_id"] = threading.get_ident()
+            metadata = {
+                "name": "新会话",
+                "created_at": "2026-09-08T12:00:00",
+                "updated_at": "2026-09-08T12:00:00",
+            }
+            return "new-session", [], [], [], "", metadata
+
+    monkeypatch.setattr(webui, "session_manager", _CreateManager())
+
+    response = asyncio.run(webui.create_session())
+    payload = _json_response_payload(response)
+
+    assert observed["thread_id"] != caller_thread
+    assert payload["session_id"] == "new-session"
+    assert payload["session"]["id"] == "new-session"
+    assert response.headers["server-timing"].startswith("session-create;dur=")
+
+
 def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_path):
     from io import BytesIO
     from starlette.datastructures import UploadFile

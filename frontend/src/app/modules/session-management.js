@@ -3,8 +3,16 @@
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
+    const newSessionCreating = !currentSessionId && createNewSessionQueue;
     if (uploadBusy) {
         sendBtn.textContent = '上传中';
+        sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = true;
+        return;
+    }
+    if (newSessionCreating && !newSessionPreflight) {
+        sendBtn.textContent = '创建中';
         sendBtn.classList.remove('is-stop');
         sendBtn.classList.remove('is-followup');
         sendBtn.disabled = true;
@@ -677,7 +685,7 @@ async function refreshSingleSessionRow(sessionId) {
 let sessionListLoadEpoch = 0;
 let sessionListLoadPromise = null;
 let sessionListRenderKey = '';
-let createNewSessionQueue = Promise.resolve();
+let createNewSessionQueue = null;
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -1733,26 +1741,47 @@ async function switchSession(sessionId, opts) {
 }
 
 async function createNewSession() {
-    createNewSessionQueue = createNewSessionQueue.then(
-        function () { return createNewSessionInner(); },
-        function () { return createNewSessionInner(); }
-    );
+    // Coalesce double-clicks and callers that race during initial startup.
+    // Serially queuing them created multiple blank sessions and prolonged the
+    // time before the first one became usable.
+    if (createNewSessionQueue) return createNewSessionQueue;
+    if (newSessionBtn) newSessionBtn.disabled = true;
+    createNewSessionQueue = Promise.resolve()
+        .then(function () { return createNewSessionInner(); })
+        .finally(function () {
+            createNewSessionQueue = null;
+            if (newSessionBtn) newSessionBtn.disabled = false;
+            setSendButtonState();
+        });
     return createNewSessionQueue;
 }
 
 async function createNewSessionInner() {
+    const leavingSessionId = currentSessionId;
+    const createStartedAt = performance.now();
     try {
         cancelSmoothStreamFollowForSessionSwitch();
-        saveChatScrollForSession(currentSessionId);
-        stashInputDraft(currentSessionId);
-        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);
-        prepareStashLeaving(currentSessionId);
-        const response = await fetch('/sessions', { method: 'POST' });
-        const data = await response.json();
-        if (data && data.session) sessionStore.upsert(data.session);
+        saveChatScrollForSession(leavingSessionId);
+        stashInputDraft(leavingSessionId);
+        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
+        prepareStashLeaving(leavingSessionId);
+
+        // Make the interaction feel immediate. The old stream has already been
+        // stashed, so show a clean composer while durable creation continues.
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
+        setCurrentSessionState(null);
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        setWelcome();
+        replayingMessages = false;
+        setSendButtonState();
+
+        const response = await fetch('/sessions', { method: 'POST' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
+        if (data && data.session) sessionStore.upsert(data.session);
         setCurrentSessionState(data.session_id);
         if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
         localStorage.setItem('lastSessionId', currentSessionId);
@@ -1761,13 +1790,9 @@ async function createNewSessionInner() {
         if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
         if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
-        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        setWelcome();
-        replayingMessages = false;
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(true);
+            renderSessionListIfChanged(false);
             void refreshSingleSessionRow(data.session_id);
         } else {
             await loadSessions();
@@ -1778,8 +1803,16 @@ async function createNewSessionInner() {
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
         scheduleContextTokensAfterPaint(currentSessionId);
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(currentSessionId, 'session.create', performance.now() - createStartedAt);
+        }
+        return currentSessionId;
     } catch (error) {
         console.error('创建新会话失败', error);
         appendLogVisible('创建新会话失败', 'error-log');
+        if (leavingSessionId && typeof switchSession === 'function') {
+            await switchSession(leavingSessionId);
+        }
+        return null;
     }
 }

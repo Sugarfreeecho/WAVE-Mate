@@ -1734,178 +1734,178 @@ const uiPerformance = (function () {
 `,xr=`const ARCHIVED_SESSIONS_PAGE_SIZE = 20;
 
 const sessionStore = {
-    seq: 0,\r
-    sessionsById: new Map(),\r
-    sessionOrder: [],\r
-    currentSessionId: null,\r
-    runsBySession: new Map(),\r
-    terminalRunIdsBySession: new Map(),\r
-    activeRunInfoBySession: new Map(),\r
+    seq: 0,
+    sessionsById: new Map(),
+    sessionOrder: [],
+    currentSessionId: null,
+    runsBySession: new Map(),
+    terminalRunIdsBySession: new Map(),
+    activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
     archivedSessions: null,
     archivedVisibleCount: 0,
-    unreadComplete: new Set(),\r
-    sseSeqBySession: new Map(),\r
-    deletedSessionTombstones: new Map(),\r
-    ui: {\r
-        loadingSessions: false,\r
-        loadingMessages: false,\r
-    },\r
-    streamActiveById: Object.create(null),\r
-\r
-    applySnapshot(sessions, archivedCount) {\r
-        this.pruneDeletedSessionTombstones();\r
-        const nextById = new Map();\r
-        const nextOrder = [];\r
-        const nextStreamActive = Object.create(null);\r
-        const list = Array.isArray(sessions) ? sessions : [];\r
-        let unreadChanged = false;\r
-        for (let i = 0; i < list.length; i += 1) {\r
-            const s = list[i];\r
-            if (!s || !s.id) continue;\r
-            const sid = String(s.id);\r
-            if (this.isDeletedSessionTombstoned(sid)) continue;\r
-            const nextSession = Object.assign({}, s);\r
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {\r
-                nextSession.stream_active = false;\r
-                nextSession.run_active = false;\r
-                nextSession.run_started_at = null;\r
-            }\r
-            if (typeof sessionUnreadComplete !== 'undefined') {\r
-                if (nextSession.unread_result) {\r
-                    if (!sessionUnreadComplete.has(sid)) {\r
-                        sessionUnreadComplete.add(sid);\r
-                        unreadChanged = true;\r
-                    }\r
-                } else if (sessionUnreadComplete.delete(sid)) {\r
-                    unreadChanged = true;\r
-                }\r
-            }\r
-            nextById.set(sid, nextSession);\r
-            nextOrder.push(sid);\r
-            nextStreamActive[sid] = !!nextSession.stream_active;\r
-        }\r
-        this.sessionsById = nextById;\r
-        this.sessionOrder = nextOrder;\r
-        this.streamActiveById = nextStreamActive;\r
-        if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {\r
-            this.archivedCount = Number(archivedCount);\r
-        }\r
-        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();\r
-    },\r
-\r
-    upsert(session) {\r
-        if (!session || !session.id) return;\r
-        const sid = String(session.id);\r
-        if (this.isDeletedSessionTombstoned(sid)) return;\r
-        const existed = this.sessionOrder.indexOf(sid) >= 0;\r
-        this.sessionsById.set(sid, session);\r
-        if (!existed) {\r
-            this.sessionOrder.unshift(sid);\r
-        }\r
-        // 任何字段更新都可能改变 last_activity_at / pinned_at，需立即重排，\r
-        // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的\r
-        // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。\r
-        this._reorderSessionOrder();\r
-        if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {\r
-            this.streamActiveById[sid] = !!session.stream_active;\r
-        }\r
-    },\r
-\r
-    // 与后端 list_sessions 的 sort_key 保持一致：\r
-    //   pinned 在前；pinned 之间按 pinned_at 倒序；非 pinned 按 last_activity_at 倒序。\r
-    // 缺失时间字段时回退到 updated_at / created_at，仍解析失败则视为 0（沉底）。\r
-    _activityTimeMs(session) {\r
-        if (!session) return 0;\r
-        var raw = session.last_activity_at || session.updated_at || session.created_at || '';\r
-        var t = Date.parse(String(raw || ''));\r
-        return Number.isFinite(t) ? t : 0;\r
-    },\r
-\r
-    _pinnedTimeMs(session) {\r
-        if (!session) return 0;\r
-        var raw = session.pinned_at || session.updated_at || session.created_at || '';\r
-        var t = Date.parse(String(raw || ''));\r
-        return Number.isFinite(t) ? t : 0;\r
-    },\r
-\r
-    _reorderSessionOrder() {\r
-        const self = this;\r
-        this.sessionOrder.sort(function (aId, bId) {\r
-            const a = self.sessionsById.get(aId);\r
-            const b = self.sessionsById.get(bId);\r
-            if (!a) return 1;\r
-            if (!b) return -1;\r
-            const aPinned = !!a.pinned;\r
-            const bPinned = !!b.pinned;\r
-            if (aPinned !== bPinned) return aPinned ? -1 : 1;\r
-            if (aPinned) return self._pinnedTimeMs(b) - self._pinnedTimeMs(a);\r
-            return self._activityTimeMs(b) - self._activityTimeMs(a);\r
-        });\r
-    },\r
-\r
-    remove(sessionId) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return;\r
-        this.sessionsById.delete(sid);\r
-        delete this.streamActiveById[sid];\r
-        this.runsBySession.delete(sid);\r
-        this.terminalRunIdsBySession.delete(sid);\r
-        this.activeRunInfoBySession.delete(sid);\r
-        this.unreadComplete.delete(sid);\r
-        this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });\r
-    },\r
-\r
-    markDeletedSession(sessionId) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return;\r
-        this.deletedSessionTombstones.set(sid, Date.now());\r
-        this.remove(sid);\r
-    },\r
-\r
-    clearDeletedSessionTombstone(sessionId) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return;\r
-        this.deletedSessionTombstones.delete(sid);\r
-    },\r
-\r
-    pruneDeletedSessionTombstones() {\r
-        const now = Date.now();\r
-        const ttl = 120000;\r
-        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {\r
-            if (now - Number(createdAt || 0) > ttl) map.delete(sid);\r
-        });\r
-    },\r
-\r
-    isDeletedSessionTombstoned(sessionId) {\r
-        this.pruneDeletedSessionTombstones();\r
-        return this.deletedSessionTombstones.has(String(sessionId || ''));\r
-    },\r
-\r
-    list() {\r
-        const out = [];\r
-        for (let i = 0; i < this.sessionOrder.length; i += 1) {\r
-            const s = this.sessionsById.get(this.sessionOrder[i]);\r
-            if (s) out.push(s);\r
-        }\r
-        return out;\r
-    },\r
-\r
-    get(sessionId) {\r
-        return this.sessionsById.get(String(sessionId || '')) || null;\r
-    },\r
-\r
-    setCurrentSession(sessionId) {\r
-        this.currentSessionId = sessionId ? String(sessionId) : null;\r
-    },\r
-\r
-    setArchivedCount(count) {\r
-        if (Number.isFinite(Number(count)) && Number(count) >= 0) {\r
-            this.archivedCount = Number(count);\r
-        }\r
-    },\r
-\r
+    unreadComplete: new Set(),
+    sseSeqBySession: new Map(),
+    deletedSessionTombstones: new Map(),
+    ui: {
+        loadingSessions: false,
+        loadingMessages: false,
+    },
+    streamActiveById: Object.create(null),
+
+    applySnapshot(sessions, archivedCount) {
+        this.pruneDeletedSessionTombstones();
+        const nextById = new Map();
+        const nextOrder = [];
+        const nextStreamActive = Object.create(null);
+        const list = Array.isArray(sessions) ? sessions : [];
+        let unreadChanged = false;
+        for (let i = 0; i < list.length; i += 1) {
+            const s = list[i];
+            if (!s || !s.id) continue;
+            const sid = String(s.id);
+            if (this.isDeletedSessionTombstoned(sid)) continue;
+            const nextSession = Object.assign({}, s);
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
+                nextSession.stream_active = false;
+                nextSession.run_active = false;
+                nextSession.run_started_at = null;
+            }
+            if (typeof sessionUnreadComplete !== 'undefined') {
+                if (nextSession.unread_result) {
+                    if (!sessionUnreadComplete.has(sid)) {
+                        sessionUnreadComplete.add(sid);
+                        unreadChanged = true;
+                    }
+                } else if (sessionUnreadComplete.delete(sid)) {
+                    unreadChanged = true;
+                }
+            }
+            nextById.set(sid, nextSession);
+            nextOrder.push(sid);
+            nextStreamActive[sid] = !!nextSession.stream_active;
+        }
+        this.sessionsById = nextById;
+        this.sessionOrder = nextOrder;
+        this.streamActiveById = nextStreamActive;
+        if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
+            this.archivedCount = Number(archivedCount);
+        }
+        if (unreadChanged && typeof persistSessionUnread === 'function') persistSessionUnread();
+    },
+
+    upsert(session) {
+        if (!session || !session.id) return;
+        const sid = String(session.id);
+        if (this.isDeletedSessionTombstoned(sid)) return;
+        const existed = this.sessionOrder.indexOf(sid) >= 0;
+        this.sessionsById.set(sid, session);
+        if (!existed) {
+            this.sessionOrder.unshift(sid);
+        }
+        // 任何字段更新都可能改变 last_activity_at / pinned_at，需立即重排，
+        // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的
+        // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。
+        this._reorderSessionOrder();
+        if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
+            this.streamActiveById[sid] = !!session.stream_active;
+        }
+    },
+
+    // 与后端 list_sessions 的 sort_key 保持一致：
+    //   pinned 在前；pinned 之间按 pinned_at 倒序；非 pinned 按 last_activity_at 倒序。
+    // 缺失时间字段时回退到 updated_at / created_at，仍解析失败则视为 0（沉底）。
+    _activityTimeMs(session) {
+        if (!session) return 0;
+        var raw = session.last_activity_at || session.updated_at || session.created_at || '';
+        var t = Date.parse(String(raw || ''));
+        return Number.isFinite(t) ? t : 0;
+    },
+
+    _pinnedTimeMs(session) {
+        if (!session) return 0;
+        var raw = session.pinned_at || session.updated_at || session.created_at || '';
+        var t = Date.parse(String(raw || ''));
+        return Number.isFinite(t) ? t : 0;
+    },
+
+    _reorderSessionOrder() {
+        const self = this;
+        this.sessionOrder.sort(function (aId, bId) {
+            const a = self.sessionsById.get(aId);
+            const b = self.sessionsById.get(bId);
+            if (!a) return 1;
+            if (!b) return -1;
+            const aPinned = !!a.pinned;
+            const bPinned = !!b.pinned;
+            if (aPinned !== bPinned) return aPinned ? -1 : 1;
+            if (aPinned) return self._pinnedTimeMs(b) - self._pinnedTimeMs(a);
+            return self._activityTimeMs(b) - self._activityTimeMs(a);
+        });
+    },
+
+    remove(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.sessionsById.delete(sid);
+        delete this.streamActiveById[sid];
+        this.runsBySession.delete(sid);
+        this.terminalRunIdsBySession.delete(sid);
+        this.activeRunInfoBySession.delete(sid);
+        this.unreadComplete.delete(sid);
+        this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
+    },
+
+    markDeletedSession(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.set(sid, Date.now());
+        this.remove(sid);
+    },
+
+    clearDeletedSessionTombstone(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.deletedSessionTombstones.delete(sid);
+    },
+
+    pruneDeletedSessionTombstones() {
+        const now = Date.now();
+        const ttl = 120000;
+        this.deletedSessionTombstones.forEach(function (createdAt, sid, map) {
+            if (now - Number(createdAt || 0) > ttl) map.delete(sid);
+        });
+    },
+
+    isDeletedSessionTombstoned(sessionId) {
+        this.pruneDeletedSessionTombstones();
+        return this.deletedSessionTombstones.has(String(sessionId || ''));
+    },
+
+    list() {
+        const out = [];
+        for (let i = 0; i < this.sessionOrder.length; i += 1) {
+            const s = this.sessionsById.get(this.sessionOrder[i]);
+            if (s) out.push(s);
+        }
+        return out;
+    },
+
+    get(sessionId) {
+        return this.sessionsById.get(String(sessionId || '')) || null;
+    },
+
+    setCurrentSession(sessionId) {
+        this.currentSessionId = sessionId ? String(sessionId) : null;
+    },
+
+    setArchivedCount(count) {
+        if (Number.isFinite(Number(count)) && Number(count) >= 0) {
+            this.archivedCount = Number(count);
+        }
+    },
+
     setArchivedLoaded(sessions, options) {
         options = options || {};
         const filtered = Array.isArray(sessions)
@@ -1925,7 +1925,7 @@ const sessionStore = {
         ));
         this.archivedCount = totalCount;
     },
-\r
+
     clearArchivedLoaded() {
         this.archivedLoaded = false;
         this.archivedSessions = null;
@@ -1950,96 +1950,96 @@ const sessionStore = {
     hasMoreArchivedSessions() {
         return this.archivedVisibleCount < this.archivedCount;
     },
-\r
-    isStreamActive(sessionId) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return false;\r
-        if (Object.prototype.hasOwnProperty.call(this.streamActiveById, sid)) {\r
-            return !!this.streamActiveById[sid];\r
-        }\r
-        const sess = this.get(sid);\r
-        return !!(sess && sess.stream_active);\r
-    },\r
-\r
-    setStreamActive(sessionId, active) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return;\r
-        this.streamActiveById[sid] = !!active;\r
-        const sess = this.sessionsById.get(sid);\r
-        if (sess) sess.stream_active = !!active;\r
-    },\r
-\r
-    applyStreamActiveMap(activeMap) {\r
-        const next = Object.create(null);\r
-        const src = activeMap || {};\r
-        Object.keys(src).forEach(function (sid) {\r
-            next[String(sid)] = !!src[sid];\r
-        });\r
-        this.streamActiveById = next;\r
-        this.sessionsById.forEach(function (sess, sid) {\r
-            sess.stream_active = !!next[sid];\r
-            sess.run_active = !!next[sid];\r
-            if (!next[sid]) sess.run_started_at = null;\r
-        });\r
-    },\r
-\r
-    setRun(sessionId, run) {\r
-        const sid = String(sessionId || '');\r
-        if (!sid) return;\r
-        if (run) this.runsBySession.set(sid, run);\r
-        else this.runsBySession.delete(sid);\r
-    },\r
-\r
-    getRun(sessionId) {\r
-        return this.runsBySession.get(String(sessionId || '')) || null;\r
-    },\r
-\r
-    hasRun(sessionId) {\r
-        return this.runsBySession.has(String(sessionId || ''));\r
-    },\r
-\r
-    markTerminalRun(sessionId, runId) {\r
-        const sid = String(sessionId || '');\r
-        const rid = String(runId || '').trim();\r
-        if (!sid || !rid) return;\r
-        let bucket = this.terminalRunIdsBySession.get(sid);\r
-        if (!bucket) {\r
-            bucket = new Set();\r
-            this.terminalRunIdsBySession.set(sid, bucket);\r
-        }\r
-        bucket.add(rid);\r
-    },\r
-\r
-    isTerminalRun(sessionId, runId) {\r
-        const sid = String(sessionId || '');\r
-        const rid = String(runId || '').trim();\r
-        if (!sid || !rid) return false;\r
-        const bucket = this.terminalRunIdsBySession.get(sid);\r
-        return !!(bucket && bucket.has(rid));\r
-    },\r
-\r
-    applyActiveRuns(activeRuns) {\r
-        const next = new Map();\r
-        const list = Array.isArray(activeRuns) ? activeRuns : [];\r
-        list.forEach(function (run) {\r
-            const sid = typeof run === 'string' ? run : (run && run.session_id);\r
-            if (!sid) return;\r
-            const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();\r
-            if (runId && this.isTerminalRun(sid, runId)) return;\r
-            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;\r
-            next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));\r
-        }, this);\r
-        this.activeRunInfoBySession = next;\r
-    },\r
-\r
-    activeRunIds() {\r
-        return Array.from(this.activeRunInfoBySession.keys());\r
-    },\r
-\r
-    getActiveRunInfo(sessionId) {\r
-        return this.activeRunInfoBySession.get(String(sessionId || '')) || null;\r
-    },\r
-\r
+
+    isStreamActive(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return false;
+        if (Object.prototype.hasOwnProperty.call(this.streamActiveById, sid)) {
+            return !!this.streamActiveById[sid];
+        }
+        const sess = this.get(sid);
+        return !!(sess && sess.stream_active);
+    },
+
+    setStreamActive(sessionId, active) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        this.streamActiveById[sid] = !!active;
+        const sess = this.sessionsById.get(sid);
+        if (sess) sess.stream_active = !!active;
+    },
+
+    applyStreamActiveMap(activeMap) {
+        const next = Object.create(null);
+        const src = activeMap || {};
+        Object.keys(src).forEach(function (sid) {
+            next[String(sid)] = !!src[sid];
+        });
+        this.streamActiveById = next;
+        this.sessionsById.forEach(function (sess, sid) {
+            sess.stream_active = !!next[sid];
+            sess.run_active = !!next[sid];
+            if (!next[sid]) sess.run_started_at = null;
+        });
+    },
+
+    setRun(sessionId, run) {
+        const sid = String(sessionId || '');
+        if (!sid) return;
+        if (run) this.runsBySession.set(sid, run);
+        else this.runsBySession.delete(sid);
+    },
+
+    getRun(sessionId) {
+        return this.runsBySession.get(String(sessionId || '')) || null;
+    },
+
+    hasRun(sessionId) {
+        return this.runsBySession.has(String(sessionId || ''));
+    },
+
+    markTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return;
+        let bucket = this.terminalRunIdsBySession.get(sid);
+        if (!bucket) {
+            bucket = new Set();
+            this.terminalRunIdsBySession.set(sid, bucket);
+        }
+        bucket.add(rid);
+    },
+
+    isTerminalRun(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid) return false;
+        const bucket = this.terminalRunIdsBySession.get(sid);
+        return !!(bucket && bucket.has(rid));
+    },
+
+    applyActiveRuns(activeRuns) {
+        const next = new Map();
+        const list = Array.isArray(activeRuns) ? activeRuns : [];
+        list.forEach(function (run) {
+            const sid = typeof run === 'string' ? run : (run && run.session_id);
+            if (!sid) return;
+            const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
+            if (runId && this.isTerminalRun(sid, runId)) return;
+            if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
+            next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
+        }, this);
+        this.activeRunInfoBySession = next;
+    },
+
+    activeRunIds() {
+        return Array.from(this.activeRunInfoBySession.keys());
+    },
+
+    getActiveRunInfo(sessionId) {
+        return this.activeRunInfoBySession.get(String(sessionId || '')) || null;
+    },
+
     shouldAcceptSseEvent(sessionId, seq, scope) {
         const sid = String(sessionId || '');
         const n = Number(seq);
@@ -2051,75 +2051,75 @@ const sessionStore = {
         this.sseSeqBySession.set(key, n);
         if (Number.isFinite(Number(this.seq)) && n > Number(this.seq)) this.seq = n;
         return true;
-    },\r
-\r
-    resetSseSeq(sessionId) {\r
+    },
+
+    resetSseSeq(sessionId) {
         const sid = String(sessionId || '');
         if (!sid) return;
         this.sseSeqBySession.delete(sid);
         Array.from(this.sseSeqBySession.keys()).forEach(function (key) {
             if (String(key).indexOf(sid + '::') === 0) this.sseSeqBySession.delete(key);
         }, this);
-    },\r
-};\r
-\r
-const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;\r
-const sessionStreamStopSuppressUntil = Object.create(null);\r
-\r
-function isSessionStreamStopSuppressed(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return false;\r
-    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);\r
-    if (!until) return false;\r
-    if (Date.now() <= until) return true;\r
-    delete sessionStreamStopSuppressUntil[sid];\r
-    return false;\r
-}\r
-\r
-function clearSessionStreamStopSuppress(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    delete sessionStreamStopSuppressUntil[sid];\r
-}\r
-\r
-function suppressSessionServerStreamActive(sessionId, ms) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);\r
-    sessionStore.setStreamActive(sid, false);\r
-    sessionStore.activeRunInfoBySession.delete(sid);\r
-    const sess = sessionStore.get(sid);\r
-    if (sess) {\r
-        sess.stream_active = false;\r
-        sess.run_active = false;\r
-        sess.run_started_at = null;\r
-    }\r
-}\r
-\r
-function setSessionServerStreamActive(sessionId, active) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return;\r
-    if (active && isSessionStreamStopSuppressed(sid)) active = false;\r
-    sessionStore.setStreamActive(sid, !!active);\r
-}\r
-\r
-function isServerStreamActive(sessionId) {\r
-    const sid = String(sessionId || '');\r
-    if (!sid) return false;\r
-    if (isSessionStreamStopSuppressed(sid)) return false;\r
-    return sessionStore.isStreamActive(sid);\r
-}\r
-\r
-function applyServerStreamActiveMap(activeMap) {\r
-    const src = activeMap || Object.create(null);\r
-    const m = Object.create(null);\r
-    Object.keys(src).forEach(function (sid) {\r
-        var active = !!src[sid];\r
-        if (active && isSessionStreamStopSuppressed(sid)) active = false;\r
-        m[sid] = active;\r
-    });\r
-    sessionStore.applyStreamActiveMap(m);\r
-}\r
+    },
+};
+
+const SESSION_STREAM_STOP_SUPPRESS_MS = 60000;
+const sessionStreamStopSuppressUntil = Object.create(null);
+
+function isSessionStreamStopSuppressed(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    const until = Number(sessionStreamStopSuppressUntil[sid] || 0);
+    if (!until) return false;
+    if (Date.now() <= until) return true;
+    delete sessionStreamStopSuppressUntil[sid];
+    return false;
+}
+
+function clearSessionStreamStopSuppress(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    delete sessionStreamStopSuppressUntil[sid];
+}
+
+function suppressSessionServerStreamActive(sessionId, ms) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    sessionStreamStopSuppressUntil[sid] = Date.now() + (Number(ms) > 0 ? Number(ms) : SESSION_STREAM_STOP_SUPPRESS_MS);
+    sessionStore.setStreamActive(sid, false);
+    sessionStore.activeRunInfoBySession.delete(sid);
+    const sess = sessionStore.get(sid);
+    if (sess) {
+        sess.stream_active = false;
+        sess.run_active = false;
+        sess.run_started_at = null;
+    }
+}
+
+function setSessionServerStreamActive(sessionId, active) {
+    const sid = String(sessionId || '');
+    if (!sid) return;
+    if (active && isSessionStreamStopSuppressed(sid)) active = false;
+    sessionStore.setStreamActive(sid, !!active);
+}
+
+function isServerStreamActive(sessionId) {
+    const sid = String(sessionId || '');
+    if (!sid) return false;
+    if (isSessionStreamStopSuppressed(sid)) return false;
+    return sessionStore.isStreamActive(sid);
+}
+
+function applyServerStreamActiveMap(activeMap) {
+    const src = activeMap || Object.create(null);
+    const m = Object.create(null);
+    Object.keys(src).forEach(function (sid) {
+        var active = !!src[sid];
+        if (active && isSessionStreamStopSuppressed(sid)) active = false;
+        m[sid] = active;
+    });
+    sessionStore.applyStreamActiveMap(m);
+}
 `,Ir=`function selectCurrentSession() {
     return sessionStore.get(sessionStore.currentSessionId);
 }
@@ -17595,8 +17595,16 @@ function renderEvent(ctx, event, eventIndex, runSessionId) {
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
+    const newSessionCreating = !currentSessionId && createNewSessionQueue;
     if (uploadBusy) {
         sendBtn.textContent = '上传中';
+        sendBtn.classList.remove('is-stop');
+        sendBtn.classList.remove('is-followup');
+        sendBtn.disabled = true;
+        return;
+    }
+    if (newSessionCreating && !newSessionPreflight) {
+        sendBtn.textContent = '创建中';
         sendBtn.classList.remove('is-stop');
         sendBtn.classList.remove('is-followup');
         sendBtn.disabled = true;
@@ -18269,7 +18277,7 @@ async function refreshSingleSessionRow(sessionId) {
 let sessionListLoadEpoch = 0;
 let sessionListLoadPromise = null;
 let sessionListRenderKey = '';
-let createNewSessionQueue = Promise.resolve();
+let createNewSessionQueue = null;
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -19325,26 +19333,47 @@ async function switchSession(sessionId, opts) {
 }
 
 async function createNewSession() {
-    createNewSessionQueue = createNewSessionQueue.then(
-        function () { return createNewSessionInner(); },
-        function () { return createNewSessionInner(); }
-    );
+    // Coalesce double-clicks and callers that race during initial startup.
+    // Serially queuing them created multiple blank sessions and prolonged the
+    // time before the first one became usable.
+    if (createNewSessionQueue) return createNewSessionQueue;
+    if (newSessionBtn) newSessionBtn.disabled = true;
+    createNewSessionQueue = Promise.resolve()
+        .then(function () { return createNewSessionInner(); })
+        .finally(function () {
+            createNewSessionQueue = null;
+            if (newSessionBtn) newSessionBtn.disabled = false;
+            setSendButtonState();
+        });
     return createNewSessionQueue;
 }
 
 async function createNewSessionInner() {
+    const leavingSessionId = currentSessionId;
+    const createStartedAt = performance.now();
     try {
         cancelSmoothStreamFollowForSessionSwitch();
-        saveChatScrollForSession(currentSessionId);
-        stashInputDraft(currentSessionId);
-        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(currentSessionId);
-        prepareStashLeaving(currentSessionId);
-        const response = await fetch('/sessions', { method: 'POST' });
-        const data = await response.json();
-        if (data && data.session) sessionStore.upsert(data.session);
+        saveChatScrollForSession(leavingSessionId);
+        stashInputDraft(leavingSessionId);
+        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
+        prepareStashLeaving(leavingSessionId);
+
+        // Make the interaction feel immediate. The old stream has already been
+        // stashed, so show a clean composer while durable creation continues.
         resetSubagentPanelForSession();
         switchSessionEpoch += 1;
         messageLoadEpoch += 1;
+        setCurrentSessionState(null);
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        setWelcome();
+        replayingMessages = false;
+        setSendButtonState();
+
+        const response = await fetch('/sessions', { method: 'POST' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
+        if (data && data.session) sessionStore.upsert(data.session);
         setCurrentSessionState(data.session_id);
         if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
         localStorage.setItem('lastSessionId', currentSessionId);
@@ -19353,13 +19382,9 @@ async function createNewSessionInner() {
         if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
         if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
         if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
-        if (typeof refreshPermissionModeSelector === 'function') refreshPermissionModeSelector(currentSessionId);
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        setWelcome();
-        replayingMessages = false;
         if (data && data.session) {
             syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(true);
+            renderSessionListIfChanged(false);
             void refreshSingleSessionRow(data.session_id);
         } else {
             await loadSessions();
@@ -19370,9 +19395,17 @@ async function createNewSessionInner() {
         setSendButtonState();
         maybeStartStreamPollForSession(currentSessionId);
         scheduleContextTokensAfterPaint(currentSessionId);
+        if (typeof uiPerformance !== 'undefined') {
+            uiPerformance.sample(currentSessionId, 'session.create', performance.now() - createStartedAt);
+        }
+        return currentSessionId;
     } catch (error) {
         console.error('创建新会话失败', error);
         appendLogVisible('创建新会话失败', 'error-log');
+        if (leavingSessionId && typeof switchSession === 'function') {
+            await switchSession(leavingSessionId);
+        }
+        return null;
     }
 }
 `,Xr=`const SSE_IDLE_TIMEOUT_MS = 120000;
