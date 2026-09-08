@@ -74,12 +74,10 @@ function applySessionEvent(event, opts) {
         }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
-        const sess = sessionStore.get(sessionId);
-        if (sess) {
-            sess.unread_result = true;
-            sess.unread_result_status = (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success';
-            sess.unread_result_at = new Date().toISOString();
-        }
+        markSessionResultComplete(
+            sessionId,
+            (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success'
+        );
         return {
             handled: true,
             runStateChanged: true,

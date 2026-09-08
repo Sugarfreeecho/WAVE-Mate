@@ -430,6 +430,35 @@ def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
     assert "vis.hidden = true" in sessions_source
 
 
+def test_frontend_final_event_immediately_transitions_to_completed_indicator():
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    shared_source = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
+    reducer_source = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
+
+    final_handler = sse_source.split("if (parsed.type === 'final') {", 1)[1].split(
+        "renderMessageRecord(runCtx", 1
+    )[0]
+    send_setup = sse_source.split("if (submitSessionIdInitial) {", 1)[1].split(
+        "} else {", 1
+    )[0]
+    foreground_finalizer = sse_source.split(
+        "if (runSessionId !== currentSessionId) {", 1
+    )[1].split("if (getSessionRunState(runSessionId))", 1)[0]
+
+    assert "function markSessionResultComplete(sessionId, status)" in shared_source
+    assert "sessionUnreadComplete.add(sid)" in shared_source
+    assert "isFirstFinalForRun" in final_handler
+    assert final_handler.index("markSessionResultComplete(runSessionId, 'success')") < final_handler.index(
+        "hasDuplicateVisibleFinal"
+    )
+    assert final_handler.index("endRunForClient(runSessionId, runCtx") < final_handler.index(
+        "hasDuplicateVisibleFinal"
+    )
+    assert "markSessionResultComplete(" in reducer_source
+    assert "if (!options.fromQueue) clearSessionUnreadState(submitSessionIdInitial);" in send_setup
+    assert "clearSessionUnreadState(runSessionId)" not in foreground_finalizer
+
+
 def test_frontend_terminal_cleanup_never_creates_empty_process_groups():
     render_source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
 

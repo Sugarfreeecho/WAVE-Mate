@@ -487,7 +487,20 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     continue;
                 }
                 if (parsed.type === 'final') {
-                    if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);
+                    if (eventSessionId === runSessionId) {
+                        var isFirstFinalForRun = !(runCtx && runCtx.seenFinal === true);
+                        markRunFinalSeen(runCtx);
+                        // Rendering may already contain the same text from the streamed
+                        // assistant response. Completion is a state transition, so it
+                        // must happen before the render-only duplicate check below.
+                        if (isFirstFinalForRun) {
+                            markSessionResultComplete(runSessionId, 'success');
+                            endRunForClient(runSessionId, runCtx, {
+                                reconcileFinal: false,
+                                followupDelayMs: 250,
+                            });
+                        }
+                    }
                     var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
                     var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
                     if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {
@@ -500,12 +513,6 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
-                if (parsed.type === 'final' && eventSessionId === runSessionId) {
-                    endRunForClient(runSessionId, runCtx, {
-                        reconcileFinal: false,
-                        followupDelayMs: 250,
-                    });
-                }
                 streamEventIdx += 1;
             } catch (e) { console.error('解析事件失败:', e); }
         }
@@ -995,7 +1002,6 @@ async function attachSessionEventStream(sessionId, opts) {
         }
         applyContextTokenLabelForCurrentSession();
         if (runSessionId === currentSessionId) {
-            clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
         }
     }
@@ -2949,6 +2955,10 @@ async function sendMessage(options) {
     // or any other network await so every send path flips in the same frame.
     if (submitSessionIdInitial) {
         if (typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(submitSessionIdInitial);
+        // A new foreground turn acknowledges the previous completion. Queued
+        // turns intentionally keep it so the sidebar can show completed work
+        // while the next queued turn is running.
+        if (!options.fromQueue) clearSessionUnreadState(submitSessionIdInitial);
         setSessionRunState(submitSessionIdInitial, optimisticRunState);
     } else {
         optimisticNewSessionRun = optimisticRunState;
@@ -3211,7 +3221,6 @@ async function sendMessage(options) {
         if (runSessionId !== currentSessionId) {
             void tryMarkSessionUnreadComplete(runSessionId);
         } else {
-            clearSessionUnreadState(runSessionId);
             updateSubagentContinueBanner(runSessionId);
         }
         if (getSessionRunState(runSessionId)) {

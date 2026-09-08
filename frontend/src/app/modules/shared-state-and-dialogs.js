@@ -111,6 +111,23 @@ function clearSessionUnreadState(sessionId, opts) {
         .finally(function () { delete sessionUnreadClearInFlight[sid]; });
 }
 
+function markSessionResultComplete(sessionId, status) {
+    var sid = String(sessionId || '');
+    if (!sid) return;
+    var normalizedStatus = status === 'failed' ? 'failed' : 'success';
+    sessionUnreadComplete.add(sid);
+    if (typeof sessionStore !== 'undefined') {
+        var sess = sessionStore.get(sid);
+        if (sess) {
+            sess.unread_result = true;
+            sess.unread_result_status = normalizedStatus;
+            sess.unread_result_at = new Date().toISOString();
+        }
+    }
+    persistSessionUnread();
+    if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
+}
+
 function splitUserMessageVisualLines(text) {
     var raw = text == null ? '' : String(text);
     var physical = raw.split('\n');
