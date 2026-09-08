@@ -178,6 +178,25 @@ def test_question_request_resolve_and_rebuild(tmp_path):
     assert event_types[-2:] == ["interaction_requested", "interaction_resolved"]
 
 
+def test_pending_counts_many_reuses_process_cache_without_disk(monkeypatch, tmp_path):
+    service = _service(tmp_path)
+    counts = {"questions": 1, "approvals": 2, "total": 3}
+    with service._pending_counts_lock:
+        service._pending_counts_cache["session-cached"] = (
+            (False, 0, 0),
+            dict(counts),
+        )
+
+    def fail_path(_session_id):
+        raise AssertionError("cached bulk counts must not touch the filesystem")
+
+    monkeypatch.setattr(service, "_pending_counts_path", fail_path)
+
+    assert service.pending_counts_many(["session-cached"]) == {
+        "session-cached": counts,
+    }
+
+
 def test_question_validation_rejects_other_and_bad_answers(tmp_path):
     service = _service(tmp_path)
     invalid = _questions()

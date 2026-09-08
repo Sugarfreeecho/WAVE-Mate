@@ -76,6 +76,55 @@ def test_runtime_v2_list_preview_never_calls_legacy_ui_loader(monkeypatch, tmp_p
     assert rows[0]["last_user_preview"] == "projection-only preview"
 
 
+def test_session_summary_uses_index_timestamp_without_touching_disk():
+    class _NoDisk:
+        def __truediv__(self, _name):
+            raise AssertionError("timestamped session rows must not touch the filesystem")
+
+    mgr = _manager_with(
+        sessions_dir=_NoDisk(),
+        _runtime_v2_primary=lambda: True,
+    )
+    row = mgr._session_entry_with_activity({
+        "id": str(uuid.uuid4()),
+        "created_at": "2026-09-08T12:00:00+00:00",
+        "updated_at": "2026-09-08T12:30:00+00:00",
+        "last_user_preview": "cached preview",
+    })
+
+    assert row["last_activity_at"] == "2026-09-08T12:30:00Z"
+    assert row["last_user_preview"] == "cached preview"
+
+
+def test_session_list_throttles_repeated_auto_archive_scans(monkeypatch, tmp_path):
+    import agent_harness
+
+    mgr = agent_harness.SessionManager(tmp_path, tmp_path / "sessions.json")
+    session_id = str(uuid.uuid4())
+    now = agent_harness.datetime.now(agent_harness.timezone.utc).isoformat()
+    mgr.index = [{
+        "id": session_id,
+        "created_at": now,
+        "updated_at": now,
+        "last_user_preview": "cached preview",
+    }]
+    calls = []
+    original = mgr._session_entry_with_activity
+
+    def counted(row):
+        calls.append(row["id"])
+        return original(row)
+
+    monkeypatch.setattr(mgr, "_session_entry_with_activity", counted)
+
+    mgr.list_sessions()
+    first_call_count = len(calls)
+    mgr.list_sessions()
+
+    assert first_call_count == 2  # maintenance pass + list materialization
+    assert len(calls) == first_call_count + 1  # only list materialization repeats
+
+
 def test_reconcile_does_not_rebuild_when_llm_user_count_matches_ui():
     import agent_harness
 

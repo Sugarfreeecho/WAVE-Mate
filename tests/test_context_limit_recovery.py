@@ -134,4 +134,5 @@ def test_react_context_limit_recovery_contract_is_bounded_and_reuses_compaction(
         "                            < CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES"
     ) in source
     assert 'reason": "context_window_exceeded"' in source
+    assert '"clear_latest_request_scope_failure"' in source
     assert "iter_count = max(0, iter_count - 1)" in source

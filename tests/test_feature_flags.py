@@ -336,7 +336,9 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "function markRunFinalSeen(ctx)" in sse
     assert "function initRunFinalTracking(ctx)" in sse
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
-    assert "if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);" in sse
+    assert "if (eventSessionId === runSessionId) {" in sse
+    assert "markRunFinalSeen(runCtx);" in sse
+    assert "markSessionResultComplete(runSessionId, 'success');" in sse
     assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
     assert "function fetchLatestStoredFinalRecord" not in sse
     assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse

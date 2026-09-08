@@ -380,15 +380,21 @@ class HumanInteractionService:
         return dict(counts)
 
     def pending_counts_many(self, session_ids: Iterable[str]) -> Dict[str, dict]:
-        """Read lightweight indexes, parallelizing only one-time upgrades."""
+        """Return cached counts and load only sessions not seen by this process.
+
+        Every interaction mutation publishes the new count into this cache, so
+        re-stat'ing every ``pending_counts.json`` during each sidebar poll only
+        adds disk contention. Direct ``pending_counts`` calls retain signature
+        validation for explicit reads and startup recovery.
+        """
         ids = list(dict.fromkeys(str(item or "").strip() for item in session_ids if str(item or "").strip()))
         ready: Dict[str, dict] = {}
-        missing: list[str] = []
-        for sid in ids:
-            if self._pending_counts_path(sid).is_file():
-                ready[sid] = self.pending_counts(sid)
-            else:
-                missing.append(sid)
+        with self._pending_counts_lock:
+            for sid in ids:
+                cached = self._pending_counts_cache.get(sid)
+                if cached is not None:
+                    ready[sid] = dict(cached[1])
+        missing = [sid for sid in ids if sid not in ready]
         if not missing:
             return ready
         workers = min(8, len(missing))

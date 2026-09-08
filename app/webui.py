@@ -1522,6 +1522,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     t0 = _time.perf_counter()
     sessions = session_manager.list_sessions(include_archived=include_archived)
     archived_count = session_manager.archived_session_count()
+    t_after_session_list = _time.perf_counter()
     _cleanup_stale_active_chat()
     active_runs = []
     pending_subagents = {}
@@ -1540,6 +1541,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
             )
         except Exception:
             logger.exception("Failed to batch pending human-interaction state for /sessions/state")
+    t_after_pending_counts = _time.perf_counter()
     for s in sessions:
         sid = s.get("id")
         if not sid:
@@ -1569,6 +1571,7 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
         }
         if run_state.get("active_run"):
             active_runs.append(run_state["active_run"])
+    t_after_decorate = _time.perf_counter()
     out = {
         "seq": int(_time.time() * 1000),
         "sessions": sessions,
@@ -1579,10 +1582,14 @@ def _build_sessions_state_snapshot(include_archived: bool = False) -> dict:
     elapsed_ms = int((_time.perf_counter() - t0) * 1000)
     if elapsed_ms >= 500:
         logger.warning(
-            "/sessions/state slow include_archived=%s sessions=%s elapsed_ms=%s",
+            "/sessions/state slow include_archived=%s sessions=%s elapsed_ms=%s "
+            "session_list_ms=%s pending_counts_ms=%s decorate_ms=%s",
             include_archived,
             len(sessions),
             elapsed_ms,
+            int((t_after_session_list - t0) * 1000),
+            int((t_after_pending_counts - t_after_session_list) * 1000),
+            int((t_after_decorate - t_after_pending_counts) * 1000),
         )
     return out
 
