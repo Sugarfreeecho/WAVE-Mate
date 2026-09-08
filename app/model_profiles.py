@@ -1415,6 +1415,7 @@ def profile_cache_key(profile: dict) -> str:
             "responses_store_disabled": responses_store_disabled(profile),
             "base_url": profile.get("base_url"),
             "api_key": profile.get("api_key"),
+            "headers": profile_request_headers(profile),
             "thinking_mode": profile.get("thinking_mode"),
             "thinking_format": profile.get("thinking_format"),
             "reasoning_effort": profile.get("reasoning_effort"),
@@ -1428,6 +1429,54 @@ def profile_cache_key(profile: dict) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def profile_request_headers(profile: dict) -> Optional[Dict[str, str]]:
+    """Resolve optional custom HTTP headers declared on a model profile.
+
+    A profile may carry a ``headers`` object whose keys are sent verbatim as
+    request headers on every LLM call of that profile (for example the
+    ``x-opencode-*`` headers some OpenCode endpoints require).  Returns None
+    when the profile declares none, so callers can omit ``default_headers``
+    entirely for every other provider.
+    """
+    raw = profile.get("headers")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: Dict[str, str] = {}
+    for key, value in raw.items():
+        key = str(key or "").strip()
+        if not key or value is None:
+            continue
+        out[key] = str(value)
+    return out or None
+
+
+def profile_with_session_request_headers(profile: dict, session_id: str) -> dict:
+    """Return a profile whose ``x-opencode-session`` header is stable per session.
+
+    Providers like OpenCode Zen recommend a stable per-conversation session id
+    (``x-opencode-session``) so they can optimize routing and prompt caching.
+    When the profile declares such a header and a non-empty ``session_id`` is
+    given, this returns a shallow copy of the profile with that header replaced
+    by a value derived from ``session_id``: the same session always maps to the
+    same header value, different sessions map to different values.
+
+    The original profile object is returned unchanged (no copy) when nothing
+    needs to change, so callers never mutate the shared profile catalog.
+    """
+    raw = profile.get("headers")
+    if not isinstance(raw, dict) or "x-opencode-session" not in raw:
+        return profile
+    sid = str(session_id or "").strip()
+    if not sid:
+        return profile
+    digest = hashlib.sha256(sid.encode("utf-8")).hexdigest()[:12]
+    clone = dict(profile)
+    headers = dict(raw)
+    headers["x-opencode-session"] = "ses-myagent-" + digest
+    clone["headers"] = headers
+    return clone
 
 
 def mark_profile_multimodal_failed(

@@ -1824,6 +1824,20 @@ class AnthropicMessagesTransport:
                 yield TransportEvent("finish", finish_reason=finish_reason or ("tool_calls" if tool_blocks else "stop"), model=model)
 
 
+def _profile_request_headers(profile: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Custom per-profile request headers (e.g. OpenCode ``x-opencode-*``)."""
+    raw = profile.get("headers")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: Dict[str, str] = {}
+    for key, value in raw.items():
+        key = str(key or "").strip()
+        if not key or value is None:
+            continue
+        out[key] = str(value)
+    return out or None
+
+
 def _ensure_builtin_provider_registry() -> None:
     snapshot = provider_registry.snapshot()
     if not all(
@@ -1843,6 +1857,7 @@ def _ensure_builtin_provider_registry() -> None:
                 base_url=str(profile.get("base_url") or "").rstrip("/") or None,
                 http_client=http_client,
                 max_retries=0,
+                default_headers=_profile_request_headers(profile),
             )
             return OpenAIResponsesTransport(
                 client,
@@ -1864,6 +1879,7 @@ def _ensure_builtin_provider_registry() -> None:
                 base_url=str(profile.get("base_url") or "").rstrip("/") or None,
                 http_client=http_client,
                 max_retries=0,
+                default_headers=_profile_request_headers(profile),
             )
             return OpenAICompatibleTransport(client)
 

@@ -1855,9 +1855,9 @@ def test_manual_model_switch_resets_run_circuit_and_sticky_candidate():
 
     # run 内 p1 失败 → 熔断记录 + fallback 接管成为“最近成功”。
     with client._failure_lock:
-        client._failed_candidates_by_scope["run-1"].add(
+        client._failed_candidates_by_scope.setdefault("run-1", {})[
             client._candidate_circuit_key(0, client.candidates[0])
-        )
+        ] = ValueError("simulated provider failure")
         client._last_successful_candidate_key = client._candidate_circuit_key(
             1, client.candidates[1]
         )
