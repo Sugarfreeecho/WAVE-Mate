@@ -4117,15 +4117,79 @@ function rootSessionIdForRenderedNode(row, runSessionId) {
     return String(runSessionId || currentSessionId || '');
 }
 
+function findToolCallRow(ctx, toolCallId) {
+    var tid = toolCallId != null ? String(toolCallId) : '';
+    if (!tid) return null;
+    var roots = [];
+    if (ctx && ctx.stream && typeof ctx.stream.querySelector === 'function') roots.push(ctx.stream);
+    var body = getExistingProcessBody(ctx);
+    if (body && roots.indexOf(body) < 0) roots.push(body);
+    for (var i = 0; i < roots.length; i += 1) {
+        if (typeof CSS !== 'undefined' && CSS.escape) {
+            try {
+                var selector = '.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]';
+                var row = roots[i].querySelector(selector);
+                if (row) return row;
+            } catch (e) { /* fall through to attribute comparison */ }
+        }
+        if (typeof roots[i].querySelectorAll === 'function') {
+            var rows = roots[i].querySelectorAll('.feed-item.feed--tool[data-tool-call-id]');
+            for (var j = 0; j < rows.length; j += 1) {
+                if (String(rows[j].getAttribute('data-tool-call-id') || '') === tid) return rows[j];
+            }
+        }
+    }
+    return null;
+}
+
+function preferredToolPendingCommandPreview(row, parsed) {
+    var incoming = parsed && parsed.command_preview != null
+        ? String(parsed.command_preview).trim()
+        : '';
+    var existing = row && row.dataset && row.dataset.commandPreview
+        ? String(row.dataset.commandPreview).trim()
+        : '';
+    if (!incoming) return existing;
+    if (!existing) return incoming;
+    // Session recovery creates a compact `ask_user` placeholder.  A resumed
+    // tool_pending event carries the full call; keep whichever preview has
+    // more information so a late compact event cannot downgrade the row.
+    return incoming.length >= existing.length ? incoming : existing;
+}
+
 function appendToolPendingRow(ctx, parsed, runSessionId) {
-    var line = formatToolPendingLine(parsed.tool, parsed.args, parsed.command_preview);
+    // A durable human-interaction record can restore a placeholder before the
+    // ephemeral tool_pending event is replayed.  tool_call_id is the stable
+    // identity across those two representations; the draft key is only a
+    // fallback for provider deltas that do not have an id yet.
+    var draft = findToolCallRow(ctx, parsed.tool_call_id);
+    if (draft && draft.getAttribute('data-event-committed') === '1') {
+        if (typeof attachHumanInteractionCardsForToolCall === 'function') {
+            attachHumanInteractionCardsForToolCall(ctx && ctx.stream, parsed.tool_call_id);
+        }
+        return;
+    }
+    if (!draft) draft = findToolDraftRow(ctx, parsed);
+    var commandPreview = preferredToolPendingCommandPreview(draft, parsed);
+    var line = formatToolPendingLine(parsed.tool, parsed.args, commandPreview);
     var so = null;
     if (parsed.react_iter != null && Number.isFinite(Number(parsed.react_iter))) so = { reactIter: Number(parsed.react_iter) };
-    var draft = findToolDraftRow(ctx, parsed);
     if (draft) {
         if (parsed.tool_call_id != null && String(parsed.tool_call_id) !== '') draft.setAttribute('data-tool-call-id', String(parsed.tool_call_id));
+        draft.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
+        draft.setAttribute('data-react-generation', String(reactGenerationForContext(ctx)));
+        if (so) {
+            var restoredReactIter = Math.max(1, Math.floor(so.reactIter));
+            draft.setAttribute('data-react-iter', String(restoredReactIter));
+            var draftAggregate = draft.closest ? draft.closest('.process-aggregate') : null;
+            var draftAggregateState = draftAggregate ? ensureProcessAggregateState(draftAggregate) : null;
+            if (draftAggregateState && restoredReactIter > draftAggregateState.maxReactIter) {
+                draftAggregateState.maxReactIter = restoredReactIter;
+            }
+        }
+        if (ctx && ctx.runId) draft.setAttribute('data-run-id', String(ctx.runId));
         draft.setAttribute('data-tool-pending', '1');
-        draft.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+        draft.dataset.commandPreview = commandPreview;
         var draftScroller = draft.querySelector('.feed-chunk-scroller');
         if (draftScroller) {
             var draftText = truncateLogTextForUi(line);
@@ -4148,7 +4212,7 @@ function appendToolPendingRow(ctx, parsed, runSessionId) {
     if (row) {
         row.setAttribute('data-tool-draft-key', toolCallDraftKey(ctx, parsed));
         row.setAttribute('data-tool-pending', '1');
-        row.dataset.commandPreview = parsed.command_preview != null ? String(parsed.command_preview) : '';
+        row.dataset.commandPreview = commandPreview;
         var chunk = row.querySelector('.feed-chunk');
         if (chunk) {
             chunk.classList.remove('is-streaming');
@@ -4164,11 +4228,7 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
     if (hasSeenStreamDelta(ctx, parsed, 'tool_command_delta')) return;
     var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
     if (!tid) return;
-    var body = getProcessBody(ctx);
-    var row = null;
-    if (body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
+    var row = findToolCallRow(ctx, tid);
     if (!row) return;
     row.dataset.commandPreview = (row.dataset.commandPreview || '') + String(parsed.delta || '');
     var text = formatToolPendingLine(parsed.tool, parsed.args, row.dataset.commandPreview);
@@ -4185,11 +4245,10 @@ function appendToolCommandDelta(ctx, parsed, runSessionId) {
 function upsertToolCallResult(ctx, parsed, runSessionId) {
     var tid = parsed.tool_call_id != null ? String(parsed.tool_call_id) : '';
     var body = getProcessBody(ctx);
-    var row = null;
-    if (tid && body && typeof CSS !== 'undefined' && CSS.escape) {
-        try { row = body.querySelector('.feed-item.feed--tool[data-tool-call-id="' + CSS.escape(tid) + '"]'); } catch (e) { row = null; }
-    }
+    var row = findToolCallRow(ctx, tid);
     if (!row) row = findToolDraftRow(ctx, parsed);
+    var rowBody = row && row.closest ? row.closest('.process-aggregate-body') : null;
+    if (rowBody) body = rowBody;
     var cmdPreview = parsed.command_preview;
     if ((!cmdPreview || !String(cmdPreview).trim()) && row && row.dataset.commandPreview) cmdPreview = row.dataset.commandPreview;
     var rawContent = parsed.raw_content != null ? String(parsed.raw_content) : '';

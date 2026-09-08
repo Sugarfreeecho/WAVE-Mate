@@ -995,6 +995,25 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     assert "pendingHumanInteractionRecords(sid).length > 0" in sse
 
 
+def test_pending_question_tool_row_is_merged_by_stable_call_id():
+    """Restoring a pending ask_user card and replaying tool_pending must
+    upgrade one row instead of rendering two draft-key variants."""
+    root = Path(__file__).resolve().parents[1]
+    rendering = (root / "frontend/src/app/modules/message-rendering.js").read_text(
+        encoding="utf-8"
+    )
+    pending = rendering.split("function appendToolPendingRow", 1)[1].split(
+        "function appendToolCommandDelta", 1
+    )[0]
+
+    id_lookup = pending.index("findToolCallRow(ctx, parsed.tool_call_id)")
+    draft_lookup = pending.index("findToolDraftRow(ctx, parsed)")
+    assert id_lookup < draft_lookup
+    assert "data-event-committed" in pending
+    assert "data-tool-draft-key" in pending
+    assert "preferredToolPendingCommandPreview(draft, parsed)" in pending
+
+
 def test_pending_human_card_auto_reveals_on_live_sse() -> None:
     """A freshly inserted pending approval/question card scrolls into view on
     live SSE, but never during history replay."""
