@@ -1,4 +1,5 @@
 const SSE_IDLE_TIMEOUT_MS = 120000;
+const SSE_RESUME_PROBE_TIMEOUT_MS = 20000;
 const STREAM_RECONNECT_MAX_ATTEMPTS = 10;
 const STREAM_RECONNECT_BASE_DELAY_MS = 500;
 const STREAM_RECONNECT_MAX_DELAY_MS = 15000;
@@ -180,6 +181,7 @@ function endRunForClient(sessionId, ctx, opts) {
 
 async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
     var timer = null;
+    var activeTimeoutMs = timeoutMs;
     try {
         return await Promise.race([
             reader.read(),
@@ -189,17 +191,20 @@ async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
                     timer = setTimeout(function () {
                         var elapsed = performance.now() - armedAt;
                         /* A heavily delayed timer means the browser/system was suspended.
-                           Give the live stream another full idle window after resume. */
-                        if (elapsed > timeoutMs + 15000) {
+                           Probe the old socket briefly after resume. A healthy stream will
+                           deliver its <=15s keepalive; a half-open fetch must not retain the
+                           local run slot for another full two minutes. */
+                        if (elapsed > activeTimeoutMs + 15000) {
                             armedAt = performance.now();
+                            activeTimeoutMs = Math.min(activeTimeoutMs, SSE_RESUME_PROBE_TIMEOUT_MS);
                             arm();
                             return;
                         }
-                        var err = new Error('SSE idle timeout after ' + String(timeoutMs) + 'ms');
+                        var err = new Error('SSE idle timeout after ' + String(activeTimeoutMs) + 'ms');
                         err.name = 'SseIdleTimeout';
                         try { reader.cancel(err).catch(function () { /* ignore */ }); } catch (e) { /* ignore */ }
                         reject(err);
-                    }, timeoutMs);
+                    }, activeTimeoutMs);
                 };
                 arm();
             }),
@@ -207,6 +212,34 @@ async function readSseChunkWithIdleTimeout(reader, timeoutMs) {
     } finally {
         if (timer) clearTimeout(timer);
     }
+}
+
+function handoffSessionStreamAfterHumanInteraction(sessionId, afterIndex) {
+    var sid = String(sessionId || '');
+    if (!sid || sid !== String(currentSessionId || '')) return;
+    var run = typeof getSessionRunState === 'function' ? getSessionRunState(sid) : null;
+    if (run && run.ctx && run.ctx.streamConsuming && run.controller) {
+        markRunAbortReason(run, 'interaction-resolved-reattach');
+        try { run.controller.abort(); } catch (e) { /* observer retry below owns recovery */ }
+    }
+    var delays = [0, 80, 240, 600, 1200];
+    var tryAttach = function (attempt) {
+        if (sid !== String(currentSessionId || '')) return;
+        if (getSessionRunState(sid)) {
+            if (attempt + 1 < delays.length) {
+                setTimeout(function () { tryAttach(attempt + 1); }, delays[attempt + 1]);
+            }
+            return;
+        }
+        if (typeof attachSessionEventStream === 'function') {
+            void attachSessionEventStream(sid, {
+                skipInitialLoad: true,
+                force: true,
+                afterIndex: Math.max(0, Number(afterIndex) || 0),
+            });
+        }
+    };
+    tryAttach(0);
 }
 
 async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {

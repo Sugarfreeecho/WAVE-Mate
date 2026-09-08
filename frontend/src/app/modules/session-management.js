@@ -1194,7 +1194,10 @@ async function reconcileRunStateFromServer(opts) {
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
             var run = getSessionRunState(sid);
-            if (run && run.reattached) {
+            var staleSubmittedStream = !!(
+                run && run.submitted && run.ctx && run.ctx.streamConsuming
+            );
+            if (run && (run.reattached || staleSubmittedStream)) {
                 abortSessionRun(sid, 'reconcile-finished');
             }
         }

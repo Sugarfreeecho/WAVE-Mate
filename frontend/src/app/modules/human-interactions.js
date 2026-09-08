@@ -952,9 +952,10 @@ async function submitHumanQuestion(card) {
         clearHumanInteractionDraft(card.dataset.sessionId, card.dataset.interactionId, card.dataset.requestVersion);
         var record = applyHumanInteractionEvent(card.dataset.sessionId, Object.assign({ type: 'interaction_resolved' }, data.interaction || {}));
         renderHumanInteractionRecord(record, card.dataset.sessionId, card.parentNode);
-        if (data.recovery_scheduled) {
-            resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
-        }
+        // Always hand the stream off after an answer. The original /chat fetch
+        // may be half-open after a long lock-screen/background wait even though
+        // its server-side worker and ask_user waiter are both still healthy.
+        resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex);
     } catch (err) {
         setHumanInteractionSubmitting(card, false);
         if (error) error.textContent = '提交失败：' + String(err && err.message ? err.message : err);
@@ -966,6 +967,10 @@ function resumeRecoveredHumanInteractionStream(sessionId, afterIndex) {
     if (!sid) return;
     if (typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sid);
     if (sid !== String(currentSessionId || '')) return;
+    if (typeof handoffSessionStreamAfterHumanInteraction === 'function') {
+        handoffSessionStreamAfterHumanInteraction(sid, afterIndex);
+        return;
+    }
     var start = function () {
         if (sid !== String(currentSessionId || '')) return;
         if (typeof attachSessionEventStream === 'function') {

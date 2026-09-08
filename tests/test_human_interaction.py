@@ -982,7 +982,11 @@ def test_pending_question_switch_and_history_mutation_frontend_contract():
     assert "ensurePendingQuestionToolRow(ctx, record, sid);" in interactions
     assert "refreshEpoch !== state.refreshEpoch" in interactions
     assert "resumeRecoveredHumanInteractionStream" in interactions
-    assert "recovery_scheduled" in interactions
+    submit = interactions.split("async function submitHumanQuestion", 1)[1].split(
+        "function resumeRecoveredHumanInteractionStream", 1
+    )[0]
+    assert "resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex)" in submit
+    assert "if (data.recovery_scheduled)" not in submit
     assert "afterIndex: Math.max(0, Number(afterIndex) || 0)" in interactions
     assert "!sessionHadUnreadResult" in sessions
     assert "&& !sessionHasActiveServerRun" in sessions

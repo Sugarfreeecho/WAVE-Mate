@@ -556,6 +556,34 @@ def test_frontend_reconnect_counts_only_real_failures():
     assert "resetStreamReconnectState(sid);" in scheduler
 
 
+def test_frontend_recovers_half_open_streams_after_sleep_and_ask_resolution():
+    sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    interactions_source = (ROOT / "frontend/src/app/modules/human-interactions.js").read_text(encoding="utf-8")
+    sessions_source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    idle_reader = sse_source.split("async function readSseChunkWithIdleTimeout", 1)[1].split(
+        "function handoffSessionStreamAfterHumanInteraction", 1
+    )[0]
+    handoff = sse_source.split("function handoffSessionStreamAfterHumanInteraction", 1)[1].split(
+        "async function consumeAgentSseResponse", 1
+    )[0]
+    submit = interactions_source.split("async function submitHumanQuestion", 1)[1].split(
+        "function resumeRecoveredHumanInteractionStream", 1
+    )[0]
+    reconcile = sessions_source.split("async function reconcileRunStateFromServer", 1)[1].split(
+        "function showSessionLoadRetry", 1
+    )[0]
+
+    assert "SSE_RESUME_PROBE_TIMEOUT_MS = 20000" in sse_source
+    assert "activeTimeoutMs = Math.min(activeTimeoutMs, SSE_RESUME_PROBE_TIMEOUT_MS)" in idle_reader
+    assert "run.controller.abort()" in handoff
+    assert "force: true" in handoff
+    assert "resumeRecoveredHumanInteractionStream(card.dataset.sessionId, recoveryAfterIndex)" in submit
+    assert "if (data.recovery_scheduled)" not in submit
+    assert "run.submitted && run.ctx && run.ctx.streamConsuming" in reconcile
+    assert "abortSessionRun(sid, 'reconcile-finished')" in reconcile
+
+
 def test_frontend_inserts_live_react_rows_in_logical_phase_order():
     source = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
     helper = source.split("function insertReactOrderedFeedRow", 1)[1].split(

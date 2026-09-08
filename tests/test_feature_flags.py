@@ -312,6 +312,7 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "isMyAgentFeatureEnabled('finalReconcile', true)" in sse
     assert "function scheduleFinalVisibleAfterRunIfEnabled" in sse
     assert "const SSE_IDLE_TIMEOUT_MS = 120000" in sse
+    assert "const SSE_RESUME_PROBE_TIMEOUT_MS = 20000" in sse
     assert "maybeAutoResumeInterruptedReact" in sse
     layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
     assert "fetch('/sessions/recover', { method: 'POST' })" in layout
@@ -1078,7 +1079,8 @@ def test_frontend_run_state_cleanup_is_run_id_scoped():
     assert "runCtx.runId = clientRunId;" in sse
     assert "clearSessionRunStateIfMatch(runSessionId, clientRunId)" in sse
     assert "clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId))" in sse
-    assert "if (run && run.reattached)" in sessions
+    assert "run && (run.reattached || staleSubmittedStream)" in sessions
+    assert "run.submitted && run.ctx && run.ctx.streamConsuming" in sessions
     assert "abortSessionRun(sid, 'reconcile-finished')" in sessions
 
 
