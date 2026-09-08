@@ -83,17 +83,37 @@ def test_change_review_frontend_is_plugin_owned_and_uses_safe_text_diff_renderin
     assert "Only rescan when a real tool row was inserted" in source
     assert "{ deferRender: true }" in source
     assert "if (hasInsertedRows) scheduleScanExisting();" in source
-    assert "if (shouldRender) scheduleRender();" in source
+    assert "syncActiveAggregateToViewport" in source
+    assert "chooseVisibleChangeReviewIndex" in source
+    assert "document.addEventListener('scroll', viewportListener, true)" in source
+    assert "document.removeEventListener('scroll', viewportListener, true)" in source
+    assert "if (shouldSync) syncActiveAggregateToViewport();" in source
     assert "if (allowUndo) item.appendChild(body);" in source
     assert "body.dataset.rendered === '1'" in source
     assert "new ResizeObserver(function ()" in source
     assert "scheduleScanExisting();" in source
-    assert "if (!options.deferRender) scheduleRender();" in source
+    assert "if (!options.deferRender) {" in source
     assert "requestAnimationFrame" in source
     assert ".diff-add" in styles and ".diff-remove" in styles
     assert ".change-review-bar[hidden]" in styles
     assert "change-review-stat-added" in styles and "change-review-stat-removed" in styles
     assert "change-review" not in (ROOT / "frontend/index.html").read_text(encoding="utf-8")
+
+
+def test_change_review_prefers_the_expanded_process_visible_in_the_viewport():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for frontend runtime checks")
+    result = subprocess.run(
+        [node, str(ROOT / "tests/js/change_review_visibility_runtime.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "change review visibility runtime checks passed" in result.stdout
 
 
 def test_plugin_navigation_host_is_removed_from_both_html_sources():

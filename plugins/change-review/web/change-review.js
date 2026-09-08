@@ -10,8 +10,10 @@ let processObserver = null;
 let sessionObserver = null;
 let scanTimer = null;
 let renderFrame = null;
+let viewportFrame = null;
 let mountedSessionId = '';
 const aggregateOwners = new WeakMap();
+let clippingAncestors = new WeakMap();
 
 function zh() {
     return String(document.documentElement.lang || 'zh').toLowerCase().startsWith('zh');
@@ -69,13 +71,107 @@ function remember(aggregate) {
     if (index >= 0) aggregateRecency.splice(index, 1);
     aggregateRecency.push(aggregate);
 }
-function fallbackAggregate() {
-    for (let index = aggregateRecency.length - 1; index >= 0; index -= 1) {
-        const candidate = aggregateRecency[index];
-        if (candidate && aggregateIsCurrent(candidate) && isExpanded(candidate)
-            && activeRows(candidate).length) return candidate;
+
+export function chooseVisibleChangeReviewIndex(metrics) {
+    let best = -1;
+    (Array.isArray(metrics) ? metrics : []).forEach(function (item, index) {
+        if (!item || Number(item.visibleHeight || 0) <= 1 || Number(item.ratio || 0) <= 0) return;
+        if (best < 0) { best = index; return; }
+        const current = metrics[best];
+        const ratioDelta = Number(item.ratio || 0) - Number(current.ratio || 0);
+        if (Math.abs(ratioDelta) > 0.001) {
+            if (ratioDelta > 0) best = index;
+            return;
+        }
+        const centerDelta = Number(item.centerDistance || 0) - Number(current.centerDistance || 0);
+        if (Math.abs(centerDelta) > 0.001) {
+            if (centerDelta < 0) best = index;
+            return;
+        }
+        const heightDelta = Number(item.visibleHeight || 0) - Number(current.visibleHeight || 0);
+        if (Math.abs(heightDelta) > 0.5) {
+            if (heightDelta > 0) best = index;
+            return;
+        }
+        if (Boolean(item.preferred) !== Boolean(current.preferred)) {
+            if (item.preferred) best = index;
+            return;
+        }
+        if (Number(item.recency || 0) > Number(current.recency || 0)) best = index;
+    });
+    return best;
+}
+function overflowClips(style) {
+    return /^(auto|scroll|hidden|clip)$/.test(String(style || '').toLowerCase());
+}
+function clippingParents(aggregate) {
+    const cached = clippingAncestors.get(aggregate);
+    if (cached) return cached;
+    const parents = [];
+    let node = aggregate && aggregate.parentElement;
+    while (node && node !== document.documentElement) {
+        const style = typeof globalThis.getComputedStyle === 'function'
+            ? globalThis.getComputedStyle(node) : null;
+        if (style && (overflowClips(style.overflowY) || overflowClips(style.overflow))) parents.push(node);
+        node = node.parentElement;
     }
-    return null;
+    clippingAncestors.set(aggregate, parents);
+    return parents;
+}
+function visibilityMetric(aggregate) {
+    if (!aggregate || !aggregate.getBoundingClientRect) return null;
+    const rect = aggregate.getBoundingClientRect();
+    const documentHeight = document.documentElement && document.documentElement.clientHeight;
+    let top = 0;
+    let bottom = Math.max(0, Number(documentHeight || globalThis.innerHeight || 0));
+    clippingParents(aggregate).forEach(function (parent) {
+        if (!parent.isConnected || !parent.getBoundingClientRect) return;
+        const bounds = parent.getBoundingClientRect();
+        top = Math.max(top, bounds.top);
+        bottom = Math.min(bottom, bounds.bottom);
+    });
+    const visibleTop = Math.max(top, rect.top);
+    const visibleBottom = Math.min(bottom, rect.bottom);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    const availableHeight = Math.max(0, bottom - top);
+    const comparableHeight = Math.min(Math.max(0, rect.height), availableHeight);
+    return {
+        visibleHeight,
+        ratio: comparableHeight > 0 ? Math.min(1, visibleHeight / comparableHeight) : 0,
+        centerDistance: availableHeight > 0
+            ? Math.abs(((visibleTop + visibleBottom) / 2) - ((top + bottom) / 2)) / availableHeight
+            : Number.POSITIVE_INFINITY,
+        preferred: aggregate === activeAggregate,
+        recency: aggregateRecency.indexOf(aggregate),
+    };
+}
+function viewportAggregate() {
+    const candidates = [];
+    const metrics = [];
+    aggregateChanges.forEach(function (_rows, aggregate) {
+        if (!aggregateIsCurrent(aggregate) || !isExpanded(aggregate) || !activeRows(aggregate).length) return;
+        candidates.push(aggregate);
+        metrics.push(visibilityMetric(aggregate));
+    });
+    const index = chooseVisibleChangeReviewIndex(metrics);
+    return index >= 0 ? candidates[index] : null;
+}
+function syncActiveAggregateToViewport(options) {
+    const next = viewportAggregate();
+    const changed = next !== activeAggregate;
+    activeAggregate = next;
+    if (changed && !(options && options.deferRender)) scheduleRender();
+    return changed;
+}
+function scheduleViewportSync() {
+    if (viewportFrame !== null) return;
+    const enqueue = typeof globalThis.requestAnimationFrame === 'function'
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : function (callback) { return globalThis.setTimeout(callback, 0); };
+    viewportFrame = enqueue(function () {
+        viewportFrame = null;
+        syncActiveAggregateToViewport();
+    });
 }
 function stats(rows) {
     let added = 0; let removed = 0; let omitted = 0;
@@ -183,7 +279,7 @@ function markReverted(snapshotIds) {
         });
         updateBadge(aggregate);
     });
-    if (!activeAggregate || !activeRows(activeAggregate).length) activeAggregate = fallbackAggregate();
+    syncActiveAggregateToViewport({ deferRender: true });
     render();
 }
 async function undo(rows) {
@@ -410,15 +506,17 @@ function applyTool(detail, options) {
         }));
     });
     remember(aggregate); updateBadge(aggregate);
-    if (isExpanded(aggregate)) activeAggregate = aggregate;
-    if (!options.deferRender) scheduleRender();
+    if (!options.deferRender) {
+        syncActiveAggregateToViewport({ deferRender: true });
+        scheduleRender();
+    }
     return true;
 }
 function onToggle(detail) {
     const aggregate = detail && detail.aggregate;
     if (!aggregate || !aggregateChanges.has(aggregate) || !aggregateIsCurrent(aggregate)) return;
-    if (detail.expanded && activeRows(aggregate).length) { remember(aggregate); activeAggregate = aggregate; }
-    else if (activeAggregate === aggregate) activeAggregate = fallbackAggregate();
+    if (detail.expanded && activeRows(aggregate).length) remember(aggregate);
+    syncActiveAggregateToViewport({ deferRender: true });
     render();
 }
 function onUiEvent(detail) {
@@ -444,7 +542,10 @@ function scanExisting() {
         { deferRender: true });
         found = found || Boolean(applied);
     }); });
-    if (found) scheduleRender();
+    if (found) {
+        syncActiveAggregateToViewport({ deferRender: true });
+        scheduleRender();
+    }
 }
 function resetForSession(nextSessionId) {
     if (scanTimer !== null) {
@@ -457,10 +558,17 @@ function resetForSession(nextSessionId) {
         } else globalThis.clearTimeout(renderFrame);
         renderFrame = null;
     }
+    if (viewportFrame !== null) {
+        if (typeof globalThis.cancelAnimationFrame === 'function') {
+            globalThis.cancelAnimationFrame(viewportFrame);
+        } else globalThis.clearTimeout(viewportFrame);
+        viewportFrame = null;
+    }
     mountedSessionId = String(nextSessionId || '');
     activeAggregate = null;
     aggregateChanges.clear();
     aggregateRecency.splice(0);
+    clippingAncestors = new WeakMap();
     closeSheet();
     render();
 }
@@ -483,11 +591,12 @@ function mount() {
         const rows = activeAggregate ? activeRows(activeAggregate) : [];
         updatePlacement(Boolean(activeAggregate && aggregateIsCurrent(activeAggregate)
             && rows.length && isExpanded(activeAggregate)));
+        scheduleViewportSync();
     }) : null;
     if (resizeObserver) { resizeObserver.observe(stage); resizeObserver.observe(inner); }
     processObserver = typeof MutationObserver === 'function' ? new MutationObserver(function (mutations) {
         let hasInsertedRows = false;
-        let shouldRender = false;
+        let shouldSync = false;
         mutations.forEach(function (mutation) {
             if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length) {
                 // The review drawer/sheet is also mounted under chat-stage.
@@ -508,15 +617,13 @@ function mount() {
                 && mutation.target.matches('.process-aggregate, .subagent-grid-card')
                 ? mutation.target : null;
             if (!aggregate || !aggregateChanges.has(aggregate) || !aggregateIsCurrent(aggregate)) return;
-            shouldRender = true;
-            if (isExpanded(aggregate) && activeRows(aggregate).length) {
-                remember(aggregate); activeAggregate = aggregate;
-            } else if (activeAggregate === aggregate) activeAggregate = fallbackAggregate();
+            shouldSync = true;
+            if (isExpanded(aggregate) && activeRows(aggregate).length) remember(aggregate);
         });
         // Historical process bodies are rendered lazily after expansion. Re-read
         // their tool rows so persisted ui.changes become visible immediately.
         if (hasInsertedRows) scheduleScanExisting();
-        if (shouldRender) scheduleRender();
+        if (shouldSync) syncActiveAggregateToViewport();
     }) : null;
     if (processObserver) processObserver.observe(stage, {
         subtree: true, attributes: true, childList: true, attributeFilter: ['class'],
@@ -531,6 +638,7 @@ export async function installChatExtension(context) {
     const toolListener = function (event) { applyTool(event.detail || {}); };
     const toggleListener = function (event) { onToggle(event.detail || {}); };
     const uiListener = function (event) { onUiEvent(event.detail || {}); };
+    const viewportListener = function () { scheduleViewportSync(); };
     const switchSessionView = function (next) {
         next = String(next || '');
         if (next === mountedSessionId) return;
@@ -557,6 +665,12 @@ export async function installChatExtension(context) {
     document.addEventListener('myagent:ui-event', uiListener);
     document.addEventListener('myagent:extension-state-changed', sessionListener);
     document.addEventListener('myagent:language-change', render);
+    // Scroll events do not bubble, so capture them to cover both the main chat
+    // scroller and the sub-agent grid without installing per-panel listeners.
+    document.addEventListener('scroll', viewportListener, true);
+    if (typeof globalThis.addEventListener === 'function') {
+        globalThis.addEventListener('resize', viewportListener);
+    }
     // Installing a chat extension is awaited by the page bootstrap. Defer the
     // historical scan so plugin discovery never blocks first paint.
     scheduleScanExisting();
@@ -565,6 +679,10 @@ export async function installChatExtension(context) {
         document.removeEventListener('myagent:process-aggregate-toggle', toggleListener);
         document.removeEventListener('myagent:ui-event', uiListener);
         document.removeEventListener('myagent:extension-state-changed', sessionListener);
+        document.removeEventListener('scroll', viewportListener, true);
+        if (typeof globalThis.removeEventListener === 'function') {
+            globalThis.removeEventListener('resize', viewportListener);
+        }
         if (resizeObserver) resizeObserver.disconnect();
         if (processObserver) processObserver.disconnect();
         if (sessionObserver) sessionObserver.disconnect();
@@ -578,11 +696,18 @@ export async function installChatExtension(context) {
             } else globalThis.clearTimeout(renderFrame);
             renderFrame = null;
         }
+        if (viewportFrame !== null) {
+            if (typeof globalThis.cancelAnimationFrame === 'function') {
+                globalThis.cancelAnimationFrame(viewportFrame);
+            } else globalThis.clearTimeout(viewportFrame);
+            viewportFrame = null;
+        }
         document.querySelectorAll('.change-review-process-badge').forEach(function (node) { node.remove(); });
         document.querySelectorAll('[data-change-review-session-id]').forEach(function (node) {
             delete node.dataset.changeReviewSessionId;
         });
         activeAggregate = null; aggregateChanges.clear(); aggregateRecency.splice(0);
+        clippingAncestors = new WeakMap();
         [drawer, bar, sheet].forEach(function (node) { if (node) node.remove(); });
         drawer = bar = sheet = null;
     };
