@@ -853,7 +853,18 @@ def _redact_runtime_log_text(value: Any) -> str:
         if item:
             text = text.replace(str(item), "***")
     text = re.sub(r"https?://[^\s,;]+", "***", text)
+    text = re.sub(
+        r"(?i)\b(authorization\s*[:=]\s*bearer\s+|bearer\s+)[^\s,;]+",
+        r"\1***",
+        text,
+    )
     text = re.sub(r"(?i)(api[_-]?key|authorization|bearer)\s*[:=]\s*[^\s,;]+", r"\1=***", text)
+    text = re.sub(r"(?i)\b(?:sk|tp)-[a-z0-9_-]{12,}\b", "***", text)
+    text = re.sub(
+        r"(?i)([?&](?:api[_-]?key|access[_-]?token|token|key)=)[^&\s,;]+",
+        r"\1***",
+        text,
+    )
     return text
 
 
@@ -882,6 +893,58 @@ def _is_network_connectivity_error(exc: BaseException) -> bool:
 
 class LocalNetworkUnavailableError(ConnectionError):
     """The machine is offline, so provider fallback must not fan out."""
+
+
+def _exception_http_status(exc: BaseException) -> Optional[int]:
+    """Extract an HTTP status without retaining an SDK response object."""
+    values = [getattr(exc, "status_code", None)]
+    response = getattr(exc, "response", None)
+    if response is not None:
+        values.append(getattr(response, "status_code", None))
+    for value in values:
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
+
+
+class CandidateFailureSnapshot(RuntimeError):
+    """Traceback-free, redacted failure retained by the run circuit breaker."""
+
+    def __init__(
+        self,
+        *,
+        candidate_key: str,
+        model: str,
+        provider: str,
+        error: BaseException,
+    ) -> None:
+        self.candidate_key = str(candidate_key or "unknown")
+        self.model = _masked_model_label(str(model or ""))
+        self.provider = str(provider or "unknown")
+        self.original_type = type(error).__name__
+        self.status_code = _exception_http_status(error)
+        message = _redact_runtime_log_text(error).replace("\r", " ").replace("\n", " ")
+        self.redacted_message = (
+            message if len(message) <= 800 else message[:799] + "…"
+        )
+        status = f" HTTP {self.status_code}" if self.status_code else ""
+        super().__init__(f"{self.original_type}{status}: {self.redacted_message}")
+
+    def summary(self) -> str:
+        label = self.model or self.candidate_key
+        return f"{label} ({self.provider}): {self}"
+
+
+class ModelCandidatesUnavailableError(RuntimeError):
+    """All candidates are circuit-broken, with safe per-candidate diagnostics."""
+
+    def __init__(self, failures: List[CandidateFailureSnapshot]) -> None:
+        super().__init__("all model candidates are unavailable for this run")
+        self.candidate_failures = tuple(failures)
 
 
 def _probe_network_connectivity(timeout: float = 0.75) -> bool:
@@ -1024,6 +1087,19 @@ def create_openai_client_for_profile(
         timeout=OPENAI_HTTP_TIMEOUT,
         **_OPENAI_SDK_KWARGS,
     )
+    request_headers = model_profiles.profile_request_headers(profile)
+    if request_headers:
+        try:
+            client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                http_client=http_client,
+                timeout=OPENAI_HTTP_TIMEOUT,
+                default_headers=request_headers,
+                **_OPENAI_SDK_KWARGS,
+            )
+        except Exception:
+            logger.debug("模型档案自定义请求头不受支持，忽略", exc_info=True)
     try:
         setattr(
             client,
@@ -1398,7 +1474,9 @@ class ExecutorLLMClient:
         candidates: List[Dict[str, Any]],
         *,
         failure_lock: Optional[Any] = None,
-        failed_candidates_by_scope: Optional[Dict[str, set[str]]] = None,
+        failed_candidates_by_scope: Optional[
+            Dict[str, Dict[str, CandidateFailureSnapshot]]
+        ] = None,
     ):
         self.candidates = candidates
         self.chat = _FallbackChat(candidates)
@@ -1439,7 +1517,10 @@ class ExecutorLLMClient:
         with self._failure_lock:
             self._request_scope = value
             if value:
-                self._failed_candidates_by_scope.setdefault(value, set())
+                if not isinstance(self._failed_candidates_by_scope.get(value), dict):
+                    # A running process may still hold the pre-upgrade set shape.
+                    # Its reasons were never retained, so retry those candidates.
+                    self._failed_candidates_by_scope[value] = {}
                 # 记录 scope → 最近使用该 scope 的客户端实例，供手动切换
                 # 模型时按会话清空熔断记录。
                 _scope_client_registry.register(value, self)
@@ -1461,6 +1542,18 @@ class ExecutorLLMClient:
             if scope:
                 self._failed_candidates_by_scope.pop(scope, None)
             self._last_successful_candidate_key = ""
+
+    def clear_latest_request_scope_failure(self) -> None:
+        """Retry the most recent candidate after rewriting an invalid request."""
+        with self._failure_lock:
+            scope = self._request_scope
+            failures = self._failed_candidates_by_scope.get(scope)
+            if not scope or not isinstance(failures, dict) or not failures:
+                return
+            latest_key = next(reversed(failures))
+            failures.pop(latest_key, None)
+            if not failures:
+                self._failed_candidates_by_scope.pop(scope, None)
 
     def note_scope_session(self, session_id: str) -> None:
         """Associate the current run scope with its session for later resets."""
@@ -1789,11 +1882,28 @@ class ExecutorLLMClient:
                     media_only_failure = request_has_media and _is_media_input_error(exc)
                     if request_scope and not media_only_failure:
                         with self._failure_lock:
-                            scoped_failures = self._failed_candidates_by_scope.setdefault(
-                                request_scope,
-                                set(),
+                            scoped_failures = self._failed_candidates_by_scope.get(
+                                request_scope
                             )
-                            scoped_failures.add(circuit_key)
+                            if not isinstance(scoped_failures, dict):
+                                # Normalize a legacy in-memory set after hot reload.
+                                scoped_failures = {}
+                                self._failed_candidates_by_scope[request_scope] = (
+                                    scoped_failures
+                                )
+                            # 保留该候选最近一次的真实异常，供"全部候选不可用"
+                            # 时沿异常链透传真实原因（403/400/429…），避免
+                            # 错误信息被笼统的 RuntimeError 覆盖。
+                            snapshot = CandidateFailureSnapshot(
+                                candidate_key=circuit_key,
+                                model=str(item.get("model") or ""),
+                                provider=str(item.get("provider") or "unknown"),
+                                error=exc,
+                            )
+                            # Reinsert so dict order represents failure recency even
+                            # when concurrent hedges update the same candidate.
+                            scoped_failures.pop(circuit_key, None)
+                            scoped_failures[circuit_key] = snapshot
                         failed_candidates.add(circuit_key)
                     last_error = exc
                     last_model = str(item.get("model") or "")
@@ -1808,6 +1918,19 @@ class ExecutorLLMClient:
         if last_error is not None:
             raise last_error
         if failed_candidates:
+            retained_failures: List[CandidateFailureSnapshot] = []
+            with self._failure_lock:
+                failures = self._failed_candidates_by_scope.get(request_scope)
+                if isinstance(failures, dict) and failures:
+                    retained_failures = [
+                        failure
+                        for failure in failures.values()
+                        if isinstance(failure, CandidateFailureSnapshot)
+                    ]
+            if retained_failures:
+                raise ModelCandidatesUnavailableError(retained_failures) from (
+                    retained_failures[-1]
+                )
             raise RuntimeError("all model candidates are unavailable for this run")
         raise RuntimeError("no model candidates configured")
 
@@ -2722,6 +2845,7 @@ class SessionManager:
     """
 
     AUTO_ARCHIVE_AFTER_DAYS = 14
+    AUTO_ARCHIVE_CHECK_INTERVAL_SEC = 300.0
 
     def __init__(self, sessions_dir: Path, index_file: Path):
         self.sessions_dir = sessions_dir
@@ -2742,6 +2866,8 @@ class SessionManager:
         self._subagent_index_cache: Dict[str, str] = {}
         self._subagent_index_cache_signature: Optional[Tuple[bool, int, int]] = None
         self._known_root_session_ids: set[str] = set()
+        self._auto_archive_check_lock = threading.Lock()
+        self._auto_archive_last_check = 0.0
         self._load_index()
         # 每次 Agent 启动都以磁盘上的会话目录为准重建索引，避免已存在但陈旧的
         # sessions.json 隐藏新增会话，或继续展示已从磁盘移除的会话。
@@ -2815,6 +2941,7 @@ class SessionManager:
         """根据 sessions 目录内存在的会话文件夹重建索引（sessions.json），磁盘与 metadata 为准。"""
         by_id: Dict[str, dict] = {}
         sub_idx = self._load_subagent_index()
+        runtime_v2_primary = self._runtime_v2_primary()
         try:
             for p in self.sessions_dir.iterdir():
                 if not p.is_dir():
@@ -2855,6 +2982,19 @@ class SessionManager:
                     except OSError:
                         created_at = datetime.now().isoformat()
                 updated_at = meta.get("updated_at") or created_at
+                # Reconcile filesystem-only activity once during the explicit
+                # startup/repair scan. Polling can then trust the in-memory index
+                # instead of stat'ing every event log on every request.
+                activity_path = p / ("events.jsonl" if runtime_v2_primary else "ui_events.json")
+                try:
+                    activity_ts = activity_path.stat().st_mtime
+                    if activity_ts > self._iso_ts(updated_at):
+                        updated_at = datetime.fromtimestamp(
+                            activity_ts,
+                            tz=timezone.utc,
+                        ).isoformat().replace("+00:00", "Z")
+                except OSError:
+                    pass
                 archived = bool(meta.get("archived", False))
                 pinned = bool(meta.get("pinned", False))
                 todo = bool(meta.get("todo", False))
@@ -6217,9 +6357,11 @@ class SessionManager:
                 best_ts = t if best_ts is None else max(best_ts, t)
             except Exception:
                 pass
-        if sid:
-            # The session index only contains top-level sessions; avoid the generic
-            # resolver here because it reloads the subagent index for every row.
+        if sid and best_ts is None:
+            # Normal session mutations update ``updated_at`` in metadata and the
+            # in-memory index. Only malformed/legacy rows without any timestamp
+            # need a filesystem fallback. This keeps sidebar polling from
+            # stat'ing every events file even when nothing changed.
             session_dir = self.sessions_dir / str(sid)
             activity_path = (
                 session_dir / "events.jsonl"
@@ -6260,6 +6402,16 @@ class SessionManager:
             return 0.0
 
     def _auto_archive_stale_sessions(self) -> None:
+        now = time.monotonic()
+        with self._auto_archive_check_lock:
+            if (
+                self._auto_archive_last_check > 0.0
+                and now - self._auto_archive_last_check < self.AUTO_ARCHIVE_CHECK_INTERVAL_SEC
+            ):
+                return
+            # Claim the periodic maintenance pass before scanning so concurrent
+            # sidebar polls cannot repeat it.
+            self._auto_archive_last_check = now
         cutoff = datetime.now(timezone.utc).timestamp() - (self.AUTO_ARCHIVE_AFTER_DAYS * 86400)
         changed = False
         for sess in list(self.index):
@@ -6618,7 +6770,9 @@ _executor_profile_catalog_cache: Optional[Tuple[float, Dict[str, dict], List[str
 _executor_config_generation = 0
 _executor_config_cache_lock = threading.Lock()
 _executor_failure_lock = threading.RLock()
-_executor_failed_candidates_by_scope: Dict[str, set[str]] = {}
+_executor_failed_candidates_by_scope: Dict[
+    str, Dict[str, CandidateFailureSnapshot]
+] = {}
 _EXECUTOR_CONFIG_CACHE_TTL_SEC = 10.0
 
 
@@ -6863,6 +7017,7 @@ def resolve_executor_candidates_for_session(
             return
         profile = profiles.get(pid)
         if profile:
+            profile = model_profiles.profile_with_session_request_headers(profile, sid)
             candidates.append(_profile_candidate(profile))
             seen.add(pid)
 

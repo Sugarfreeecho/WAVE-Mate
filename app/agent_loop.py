@@ -75,6 +75,7 @@ from agent_harness import (
     WORK_DIR,
     LocalNetworkUnavailableError,
     machine_network_available,
+    _redact_runtime_log_text,
 )
 from agent_memory import (
     auto_length_strategy_status_line,
@@ -4009,8 +4010,11 @@ def _api_error_search_text(exc: BaseException) -> str:
                     values.append(response_json())
                 except Exception:
                     pass
-        current = getattr(current, "__cause__", None) or getattr(
-            current, "__context__", None
+        cause = getattr(current, "__cause__", None)
+        current = cause or (
+            None
+            if getattr(current, "__suppress_context__", False)
+            else getattr(current, "__context__", None)
         )
 
     parts: List[str] = []
@@ -4060,7 +4064,58 @@ def _context_limit_recovery_window(configured: int, reported: int) -> int:
     return min(configured_window, reported_window)
 
 
-def _classify_api_error(exc: BaseException) -> dict:
+def _iter_exception_chain(exc: BaseException):
+    """沿 __cause__ / __context__ 遍历异常链（外层 -> 根因），防循环。"""
+    seen = set()
+    current = exc
+    while current is not None:
+        key = id(current)
+        if key in seen:
+            return
+        seen.add(key)
+        yield current
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+
+
+def _format_exception_chain(
+    exc: BaseException,
+    *,
+    max_depth: int = 6,
+    per_part: int = 200,
+    total: int = 900,
+) -> str:
+    """把异常链压成单行可读文本，供错误卡 detail / 日志使用。"""
+    parts = []
+    for index, item in enumerate(_iter_exception_chain(exc)):
+        if index >= max_depth:
+            parts.append("...")
+            break
+        text = _redact_runtime_log_text(f"{type(item).__name__}: {item}")
+        if len(text) > per_part:
+            text = text[: per_part - 1] + "…"
+        parts.append(text)
+        candidate_failures = getattr(item, "candidate_failures", ())
+        if candidate_failures:
+            summaries = []
+            for failure in candidate_failures:
+                summary = getattr(failure, "summary", None)
+                value = summary() if callable(summary) else str(failure)
+                summaries.append(value)
+            aggregate = _redact_runtime_log_text(
+                "candidate failures: " + " | ".join(summaries)
+            )
+            if len(aggregate) > per_part * 3:
+                aggregate = aggregate[: per_part * 3 - 1] + "…"
+            parts.append(aggregate)
+    joined = " <- ".join(parts) or f"{type(exc).__name__}: {exc}"
+    if len(joined) > total:
+        joined = joined[: total - 1] + "…"
+    return joined
+
+
+def _classify_api_error_leaf(exc: BaseException) -> dict:
     """将 LLM API 异常分类为结构化错误信息（错误码 + 中文描述 + 解决方案）。"""
     try:
         from openai import APIConnectionError, APITimeoutError, AuthenticationError, BadRequestError, InternalServerError, NotFoundError, PermissionDeniedError, RateLimitError, UnprocessableEntityError
@@ -4069,6 +4124,11 @@ def _classify_api_error(exc: BaseException) -> dict:
 
     msg = str(exc).lower()
     context_limit = _context_limit_error_info(exc)
+    status_code = getattr(exc, "status_code", None)
+    try:
+        status_code = int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        status_code = None
 
     if context_limit["matched"]:
         return {
@@ -4085,27 +4145,34 @@ def _classify_api_error(exc: BaseException) -> dict:
                 "msg": "无法连接到 API 服务器。",
                 "solution": "请检查网络连接、当前 model profile 的 API Base URL、VPN/代理设置。",
                 "retry": 0}
-    if isinstance(exc, AuthenticationError):
+    if isinstance(exc, AuthenticationError) or status_code == 401:
         return {"code": "401", "title": "API 认证失败",
                 "msg": "API Key 无效或已过期。",
                 "solution": "请检查当前 model profile 中的 API Key 是否正确。",
                 "retry": 0}
-    if isinstance(exc, PermissionDeniedError):
+    if isinstance(exc, PermissionDeniedError) or status_code == 403:
         return {"code": "403", "title": "访问被拒绝",
                 "msg": "当前地区不支持或 API Key 被风控。",
                 "solution": "请新建 API Key，或检查服务地区限制。",
                 "retry": 0}
-    if isinstance(exc, NotFoundError):
+    if isinstance(exc, NotFoundError) or status_code == 404:
         return {"code": "404", "title": "模型或接口不可用",
                 "msg": "请求的模型不支持当前能力（如图像输入）。",
                 "solution": "请检查模型名称是否正确，或换一个支持该能力的模型。",
                 "retry": 0}
-    if isinstance(exc, RateLimitError) or ("rate" in msg and "limit" in msg):
+    if (
+        isinstance(exc, RateLimitError)
+        or status_code == 429
+        or ("rate" in msg and "limit" in msg)
+    ):
         return {"code": "429", "title": "请求频率超限",
                 "msg": "已重试 3 次，均因速率限制失败。",
                 "solution": "请稍等片刻再试，或降低请求频率；Token Plan 用户可考虑升级套餐。",
                 "retry": 3}
-    if isinstance(exc, BadRequestError) or isinstance(exc, UnprocessableEntityError):
+    if isinstance(exc, (BadRequestError, UnprocessableEntityError)) or status_code in {
+        400,
+        422,
+    }:
         return {"code": "400", "title": "请求参数错误",
                 "msg": "请求体格式不符合 API 要求。",
                 "solution": "请检查消息格式、必填字段、模型名称是否正确。",
@@ -4115,8 +4182,18 @@ def _classify_api_error(exc: BaseException) -> dict:
                 "msg": "输入内容触发了安全审核。",
                 "solution": "请避免敏感或违规内容，修改后重试。",
                 "retry": 0}
-    if isinstance(exc, InternalServerError) or "500" in msg or "502" in msg or "503" in msg:
-        code = "502" if "502" in msg else ("503" if "503" in msg else "500")
+    if (
+        isinstance(exc, InternalServerError)
+        or status_code in {500, 502, 503}
+        or "500" in msg
+        or "502" in msg
+        or "503" in msg
+    ):
+        code = (
+            str(status_code)
+            if status_code in {500, 502, 503}
+            else ("502" if "502" in msg else ("503" if "503" in msg else "500"))
+        )
         return {"code": code, "title": f"服务器错误（{code}）",
                 "msg": "已重试 3 次，服务器仍返回错误。",
                 "solution": "请稍后重试；若持续出现请联系 API 服务商。",
@@ -4125,6 +4202,23 @@ def _classify_api_error(exc: BaseException) -> dict:
             "msg": "发生未知错误。",
             "solution": "请先检查模型配置，或到 GitHub 提交 issue 反馈。",
             "retry": 0}
+
+
+def _classify_api_error(exc: BaseException) -> dict:
+    """将 LLM API 异常分类为结构化错误信息（错误码 + 中文描述 + 解决方案）。
+
+    优先沿异常链（__cause__/__context__）查找第一个可识别的真实原因：
+    例如候选切换层抛出的 RuntimeError 往往以底层 403/400 异常为 cause，
+    此时应展示 403"访问被拒绝"等可操作信息，而不是笼统的"发生未知错误"。
+    """
+    best = None
+    for item in _iter_exception_chain(exc):
+        classified = _classify_api_error_leaf(item)
+        if classified.get("code") != "OTHER":
+            return classified
+        if best is None:
+            best = classified
+    return best if best is not None else _classify_api_error_leaf(exc)
 
 
 async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]], Any]] = None) -> State:
@@ -6925,13 +7019,23 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             await _push_stream_event(state, _switch_ev, emit=emit)
                         model_switch_status_events.clear()
                     _cls = _classify_api_error(_llm_exc)
-                    _err_detail = f"{type(_llm_exc).__name__}: {_llm_exc}"
+                    # detail 展示完整原因链（如 RuntimeError: all model
+                    # candidates ... <- PermissionDeniedError: 403 …），
+                    # 避免只看得到被包装后的笼统错误。
+                    _err_detail = _format_exception_chain(_llm_exc)
                     logger.error("LLM 调用失败 [iter %s] %s %s: %s", iter_count, _cls["code"], _cls["title"], _err_detail)
                     if _cls.get("code") == "CTX":
                         if (
                             context_limit_recovery_attempts
                             < CONTEXT_EMERGENCY_SHRINK_MAX_RETRIES
                         ):
+                            clear_latest_failure = getattr(
+                                iter_client,
+                                "clear_latest_request_scope_failure",
+                                None,
+                            )
+                            if callable(clear_latest_failure):
+                                clear_latest_failure()
                             context_limit_recovery_attempts += 1
                             context_limit_recovery_pending = True
                             context_limit_reported_window = max(
