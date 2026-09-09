@@ -51,6 +51,10 @@ function applySessionEvent(event, opts) {
         }
         const suppressed = typeof isSessionStreamStopSuppressed === 'function'
             && isSessionStreamStopSuppressed(sessionId);
+        const finalizingRunId = String(sessionStore.finalizingRunIdsBySession.get(sessionId) || '');
+        if (!runId || (finalizingRunId && finalizingRunId !== runId)) {
+            sessionStore.clearRunFinalizing(sessionId);
+        }
         setSessionServerStreamActive(sessionId, !suppressed);
         const sess = sessionStore.get(sessionId);
         if (sess) {
@@ -74,17 +78,34 @@ function applySessionEvent(event, opts) {
         }
         if (type === 'run_finished' && typeof clearSessionStreamStopSuppress === 'function') clearSessionStreamStopSuppress(sessionId);
         markSessionRunInactive(sessionId);
-        markSessionResultComplete(
-            sessionId,
-            (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success'
-        );
+        const goalContinues = type === 'run_finished'
+            && typeof isGoalActiveForSession === 'function'
+            && isGoalActiveForSession(sessionId);
+        if (goalContinues && typeof clearSessionUnreadState === 'function') {
+            clearSessionUnreadState(sessionId, { server: false });
+        } else {
+            markSessionResultComplete(
+                sessionId,
+                (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success'
+            );
+        }
         return {
             handled: true,
             runStateChanged: true,
+            goalContinues: goalContinues,
             messageRecord: messageRecord,
         };
     }
     if (type === 'final' && source === 'sse') {
+        const localRun = getSessionRunState(sessionId);
+        const localRunId = String((localRun && localRun.runId) || '').trim();
+        const activeInfo = sessionStore.activeRunInfoBySession.get(sessionId);
+        const activeRunId = String((activeInfo && (activeInfo.run_id || activeInfo.runId)) || '').trim();
+        const knownCurrentRunId = localRunId || activeRunId;
+        const finalizingRunId = runId || knownCurrentRunId;
+        if (finalizingRunId && (!runId || !knownCurrentRunId || runId === knownCurrentRunId)) {
+            sessionStore.markRunFinalizing(sessionId, finalizingRunId);
+        }
         return { handled: false, finalStateChanged: true, messageRecord: messageRecord };
     }
     if (type === 'context_tokens') {

@@ -58,7 +58,7 @@ from agent_loop import (
     remove_session_steer,
     transition_session_steer,
 )
-from session_lifecycle import get_run_started_at, is_run_active
+from session_lifecycle import get_active_run_info, get_run_started_at, is_run_active
 from session_event_bus import (
     add_event_listener,
     publish_session_event,
@@ -658,6 +658,7 @@ def _runtime_v2_active_run_info(sid: str) -> dict:
         run_id = str(first.get("run_id") or "").strip()
         started_at = first.get("started_at") or first.get("heartbeat_at")
         return {
+            **first,
             "session_id": sid,
             "run_id": run_id,
             "run_active": True,
@@ -1305,6 +1306,8 @@ def _runtime_v2_chat_sse_payload(session_id: str, event_dict: dict) -> Optional[
         if ui_event is not None:
             ui_event = dict(ui_event)
             ui_event.setdefault("session_id", session_id)
+            if run_id:
+                ui_event.setdefault("run_id", run_id)
             ui_event["runtime_seq"] = runtime_seq
             payload["ui_event"] = ui_event
         return payload
@@ -1489,12 +1492,27 @@ def _session_run_state_fields_light(sid: str) -> dict:
             "stream_connections": stream_connections,
             "active_run": None,
         }
-    local_run_active = bool(is_run_active(sid))
+    local_run_info = get_active_run_info(sid)
+    local_task_exists = bool(is_run_active(sid))
+    local_run_active = (
+        bool(local_run_info.get("run_active", True))
+        if isinstance(local_run_info, dict)
+        else local_task_exists
+    )
     starting = False
     with _chat_start_lock:
-        starting = sid in _chat_starting_by_session
-    run_active = bool(local_run_active or starting or stream_connections > 0)
-    started_at = get_run_started_at(sid) if local_run_active else None
+        starting = sid in _chat_starting_by_session and not local_task_exists
+    # Transport connections are health/observation data, not lifecycle state.
+    # A socket that is still draining after a durable terminal must never
+    # reopen the run in /sessions/state.
+    run_active = bool(local_run_active or starting)
+    started_at = None
+    if local_run_active:
+        started_at = (
+            local_run_info.get("started_at")
+            if isinstance(local_run_info, dict)
+            else get_run_started_at(sid)
+        )
     try:
         from runtime_v2 import runtime_v2_primary
         is_runtime_v2 = bool(runtime_v2_primary())
@@ -1505,14 +1523,14 @@ def _session_run_state_fields_light(sid: str) -> dict:
         "run_active": run_active,
         "run_started_at": started_at,
         "stream_connections": stream_connections,
-        "active_run": {
-            "session_id": sid,
-            "stream_connections": stream_connections,
-            "run_active": run_active,
-            "started_at": started_at,
-            "runtime_v2": is_runtime_v2,
-            "lightweight": True,
-        } if run_active else None,
+        "active_run": dict(
+            local_run_info or {"session_id": sid},
+            stream_connections=stream_connections,
+            run_active=run_active,
+            started_at=started_at,
+            runtime_v2=is_runtime_v2,
+            lightweight=True,
+        ) if run_active else None,
     }
 
 
@@ -1605,23 +1623,41 @@ _sessions_state_cache: dict = {
 _sessions_state_cache_lock = threading.Lock()
 _sessions_state_build_locks = {False: threading.Lock(), True: threading.Lock()}
 _sessions_state_refreshing: set[bool] = set()
+_sessions_state_refresh_generation: dict[bool, int] = {}
+_sessions_state_cache_generation = 0
 
 
-def _refresh_sessions_state_cache(key: bool) -> None:
+def _invalidate_sessions_state_cache() -> None:
+    """Expire snapshots without blocking readers or accepting an old refresh."""
+    global _sessions_state_cache_generation
+
+    with _sessions_state_cache_lock:
+        _sessions_state_cache_generation += 1
+        for key in (False, True):
+            _sessions_state_cache[key] = {
+                "ts": 0.0,
+                "payload": _sessions_state_cache[key]["payload"],
+            }
+
+
+def _refresh_sessions_state_cache(key: bool, generation: int) -> None:
     import time as _time
 
     try:
         payload = _build_sessions_state_snapshot(include_archived=key)
         with _sessions_state_cache_lock:
-            _sessions_state_cache[key] = {
-                "ts": _time.monotonic(),
-                "payload": payload,
-            }
+            if generation == _sessions_state_cache_generation:
+                _sessions_state_cache[key] = {
+                    "ts": _time.monotonic(),
+                    "payload": payload,
+                }
     except Exception:
         logger.exception("Background /sessions/state refresh failed")
     finally:
         with _sessions_state_cache_lock:
-            _sessions_state_refreshing.discard(key)
+            if _sessions_state_refresh_generation.get(key) == generation:
+                _sessions_state_refreshing.discard(key)
+                _sessions_state_refresh_generation.pop(key, None)
 
 
 def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dict:
@@ -1630,6 +1666,7 @@ def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dic
     now = _time.monotonic()
     key = bool(include_archived)
     with _sessions_state_cache_lock:
+        generation = _sessions_state_cache_generation
         cached = _sessions_state_cache[key]
         if (
             cached["payload"] is not None
@@ -1642,9 +1679,10 @@ def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dic
         if cached["payload"] is not None:
             if key not in _sessions_state_refreshing:
                 _sessions_state_refreshing.add(key)
+                _sessions_state_refresh_generation[key] = generation
                 threading.Thread(
                     target=_refresh_sessions_state_cache,
-                    args=(key,),
+                    args=(key, generation),
                     name=f"sessions-state-refresh-{int(key)}",
                     daemon=True,
                 ).start()
@@ -1655,15 +1693,17 @@ def _build_sessions_state_snapshot_cached(include_archived: bool = False) -> dic
     build_lock = _sessions_state_build_locks[key]
     with build_lock:
         with _sessions_state_cache_lock:
+            generation = _sessions_state_cache_generation
             cached = _sessions_state_cache[key]
             if cached["payload"] is not None:
                 return cached["payload"]
         payload = _build_sessions_state_snapshot(include_archived=key)
         with _sessions_state_cache_lock:
-            _sessions_state_cache[key] = {
-                "ts": _time.monotonic(),
-                "payload": payload,
-            }
+            if generation == _sessions_state_cache_generation:
+                _sessions_state_cache[key] = {
+                    "ts": _time.monotonic(),
+                    "payload": payload,
+                }
         return payload
 
 def get_index_html():
@@ -2615,6 +2655,7 @@ async def get_session_detail(
             s["stream_active"] = bool(run_state["stream_active"])
             s["run_active"] = bool(run_state["run_active"])
             s["run_started_at"] = run_state["run_started_at"]
+            s["active_run"] = run_state.get("active_run")
             s["title_generation_pending"] = is_session_title_generation_pending(str(sid))
             s["pending_human_interactions"] = _session_pending_human_counts(str(sid))
             try:
@@ -2636,6 +2677,7 @@ async def get_session_detail(
             s["stream_active"] = False
             s["run_active"] = False
             s["run_started_at"] = None
+            s["active_run"] = None
             s["title_generation_pending"] = False
             s["pending_human_interactions"] = {"questions": 0, "approvals": 0, "total": 0}
             s["react_can_continue"] = False
@@ -3011,6 +3053,7 @@ async def create_session():
     session_id, _, _, _, _, metadata = await asyncio.to_thread(
         session_manager.get_or_create_session
     )
+    _invalidate_sessions_state_cache()
     session = {
         "id": session_id,
         "name": (metadata or {}).get("name") or "新会话",
@@ -3498,6 +3541,7 @@ async def delete_session(session_id: str):
         await run_in_threadpool(_run_history_op_locked, sid, session_manager.delete_session, sid)
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+    _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok"})
 
 
@@ -4408,6 +4452,21 @@ _UI_ATTENTION_NOTIFY_EVENT_TYPES = {
     "interaction_requested": "pending",
 }
 
+_SESSION_STATE_INVALIDATION_EVENT_TYPES = {
+    "run_started",
+    "final",
+    "run_finished",
+    "run_failed",
+    "run_interrupted",
+}
+
+
+def _on_session_lifecycle_event_invalidate_state(_session_id: str, event: dict) -> None:
+    if not isinstance(event, dict):
+        return
+    if str(event.get("type") or "") in _SESSION_STATE_INVALIDATION_EVENT_TYPES:
+        _invalidate_sessions_state_cache()
+
 
 def _on_session_event_for_attention_notify(session_id: str, event: dict) -> None:
     if not isinstance(event, dict) or event.get("_subagent_forward"):
@@ -4431,6 +4490,7 @@ def _on_session_event_for_attention_notify(session_id: str, event: dict) -> None
 
 
 add_event_listener(_on_session_event_for_attention_notify)
+add_event_listener(_on_session_lifecycle_event_invalidate_state)
 
 
 async def _schedule_ui_closed_notify() -> None:
@@ -5504,6 +5564,7 @@ async def get_session_history_snapshot(
                 "stream_active": bool(run_state.get("stream_active")),
                 "run_active": bool(run_state.get("run_active")),
                 "run_started_at": run_state.get("run_started_at"),
+                "active_run": run_state.get("active_run"),
             })
         except Exception as exc:
             logger.warning("Runtime V2 history snapshot failed for %s: %s", session_id, exc)
@@ -6036,6 +6097,7 @@ async def rename_session(session_id: str, name: str = Form(...)):
     if not normalized_name:
         return JSONResponse(content={"status": "error", "error": "session name is required"}, status_code=400)
     session_manager.set_session_name(session_id, normalized_name)
+    _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok"})
 
 
@@ -6108,18 +6170,21 @@ async def export_session(session_id: str):
 @fastapi_app.put("/sessions/{session_id}/archive")
 async def archive_session(session_id: str, archived: bool = Form(...)):
     session_manager.set_session_archived(session_id, archived)
+    _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok"})
 
 
 @fastapi_app.put("/sessions/{session_id}/pin")
 async def pin_session(session_id: str, pinned: bool = Form(...)):
     session_manager.set_session_pinned(session_id, pinned)
+    _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok"})
 
 
 @fastapi_app.put("/sessions/{session_id}/todo")
 async def todo_session(session_id: str, todo: bool = Form(...)):
     session_manager.set_session_todo(session_id, todo)
+    _invalidate_sessions_state_cache()
     return JSONResponse(content={"status": "ok"})
 
 

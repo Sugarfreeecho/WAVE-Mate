@@ -7,6 +7,7 @@ const sessionStore = {
     currentSessionId: null,
     runsBySession: new Map(),
     terminalRunIdsBySession: new Map(),
+    finalizingRunIdsBySession: new Map(),
     activeRunInfoBySession: new Map(),
     archivedCount: 0,
     archivedLoaded: false,
@@ -15,6 +16,9 @@ const sessionStore = {
     unreadComplete: new Set(),
     sseSeqBySession: new Map(),
     deletedSessionTombstones: new Map(),
+    snapshotProtectedSessions: new Map(),
+    snapshotRequestSeq: 0,
+    lastAppliedSnapshotRequestSeq: 0,
     ui: {
         loadingSessions: false,
         loadingMessages: false,
@@ -27,12 +31,14 @@ const sessionStore = {
         const nextOrder = [];
         const nextStreamActive = Object.create(null);
         const list = Array.isArray(sessions) ? sessions : [];
+        const snapshotIds = new Set();
         let unreadChanged = false;
         for (let i = 0; i < list.length; i += 1) {
             const s = list[i];
             if (!s || !s.id) continue;
             const sid = String(s.id);
             if (this.isDeletedSessionTombstoned(sid)) continue;
+            snapshotIds.add(sid);
             const nextSession = Object.assign({}, s);
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
                 nextSession.stream_active = false;
@@ -53,9 +59,28 @@ const sessionStore = {
             nextOrder.push(sid);
             nextStreamActive[sid] = !!nextSession.stream_active;
         }
+        // POST /sessions can finish while an older full snapshot is still in
+        // flight. Preserve that newer row until the server acknowledges it in
+        // a subsequent snapshot, so the sidebar cannot make it disappear.
+        this.snapshotProtectedSessions.forEach(function (protectedSession, sid, protectedMap) {
+            if (snapshotIds.has(sid)) {
+                protectedMap.delete(sid);
+                return;
+            }
+            if (sessionStore.isDeletedSessionTombstoned(sid)) {
+                protectedMap.delete(sid);
+                return;
+            }
+            const localSession = sessionStore.sessionsById.get(sid) || protectedSession;
+            if (!localSession || nextById.has(sid)) return;
+            nextById.set(sid, Object.assign({}, localSession));
+            nextOrder.unshift(sid);
+            nextStreamActive[sid] = !!localSession.stream_active;
+        });
         this.sessionsById = nextById;
         this.sessionOrder = nextOrder;
         this.streamActiveById = nextStreamActive;
+        this._reorderSessionOrder();
         if (Number.isFinite(Number(archivedCount)) && Number(archivedCount) >= 0) {
             this.archivedCount = Number(archivedCount);
         }
@@ -78,6 +103,15 @@ const sessionStore = {
         if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
             this.streamActiveById[sid] = !!session.stream_active;
         }
+    },
+
+    protectFromSnapshots(session) {
+        if (!session || !session.id) return;
+        const sid = String(session.id);
+        if (this.isDeletedSessionTombstoned(sid)) return;
+        const copy = Object.assign({}, session, { id: sid });
+        this.snapshotProtectedSessions.set(sid, copy);
+        this.upsert(copy);
     },
 
     // 与后端 list_sessions 的 sort_key 保持一致：
@@ -119,8 +153,10 @@ const sessionStore = {
         delete this.streamActiveById[sid];
         this.runsBySession.delete(sid);
         this.terminalRunIdsBySession.delete(sid);
+        this.finalizingRunIdsBySession.delete(sid);
         this.activeRunInfoBySession.delete(sid);
         this.unreadComplete.delete(sid);
+        this.snapshotProtectedSessions.delete(sid);
         this.sessionOrder = this.sessionOrder.filter(function (id) { return id !== sid; });
     },
 
@@ -275,6 +311,40 @@ const sessionStore = {
             this.terminalRunIdsBySession.set(sid, bucket);
         }
         bucket.add(rid);
+        while (bucket.size > 64) {
+            bucket.delete(bucket.values().next().value);
+        }
+        if (this.finalizingRunIdsBySession.get(sid) === rid) {
+            this.finalizingRunIdsBySession.delete(sid);
+        }
+    },
+
+    markRunFinalizing(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid || !rid || this.isTerminalRun(sid, rid)) return;
+        this.finalizingRunIdsBySession.set(sid, rid);
+        const info = this.activeRunInfoBySession.get(sid);
+        if (info && String(info.run_id || info.runId || '').trim() === rid) {
+            info.phase = 'finalizing';
+        }
+    },
+
+    clearRunFinalizing(sessionId, runId) {
+        const sid = String(sessionId || '');
+        const rid = String(runId || '').trim();
+        if (!sid) return;
+        if (!rid || String(this.finalizingRunIdsBySession.get(sid) || '') === rid) {
+            this.finalizingRunIdsBySession.delete(sid);
+        }
+    },
+
+    isRunFinalizing(sessionId) {
+        const sid = String(sessionId || '');
+        if (!sid) return false;
+        const info = this.activeRunInfoBySession.get(sid);
+        if (info && info.phase === 'finalizing') return true;
+        return this.finalizingRunIdsBySession.has(sid);
     },
 
     isTerminalRun(sessionId, runId) {
@@ -292,11 +362,48 @@ const sessionStore = {
             const sid = typeof run === 'string' ? run : (run && run.session_id);
             if (!sid) return;
             const runId = typeof run === 'string' ? '' : String((run && (run.run_id || run.runId)) || '').trim();
+            if (run && run.runtime_v2 && !runId) return;
             if (runId && this.isTerminalRun(sid, runId)) return;
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) return;
             next.set(String(sid), typeof run === 'string' ? { session_id: String(sid) } : Object.assign({}, run));
+            if (runId && run && run.phase === 'finalizing') {
+                this.finalizingRunIdsBySession.set(String(sid), runId);
+            }
         }, this);
         this.activeRunInfoBySession = next;
+    },
+
+    applyActiveRunForSession(sessionId, activeRun) {
+        const sid = String(sessionId || '');
+        if (!sid) return false;
+        const info = activeRun && typeof activeRun === 'object'
+            ? Object.assign({}, activeRun)
+            : null;
+        const runId = String((info && (info.run_id || info.runId)) || '').trim();
+        const active = !!(info && info.run_active !== false);
+        const identified = !(info && info.runtime_v2) || !!runId;
+        if (active && identified && !(runId && this.isTerminalRun(sid, runId))) {
+            this.activeRunInfoBySession.set(sid, info);
+            this.setStreamActive(sid, true);
+            const sess = this.get(sid);
+            if (sess) {
+                sess.run_active = true;
+                sess.run_started_at = info.started_at || info.startedAt || sess.run_started_at || null;
+            }
+            if (runId && info.phase === 'finalizing') {
+                this.finalizingRunIdsBySession.set(sid, runId);
+            }
+            return true;
+        }
+        this.activeRunInfoBySession.delete(sid);
+        this.clearRunFinalizing(sid, runId);
+        this.setStreamActive(sid, false);
+        const sess = this.get(sid);
+        if (sess) {
+            sess.run_active = false;
+            sess.run_started_at = null;
+        }
+        return false;
     },
 
     activeRunIds() {

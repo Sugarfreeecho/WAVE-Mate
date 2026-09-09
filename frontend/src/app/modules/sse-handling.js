@@ -147,6 +147,18 @@ function endRunForClient(sessionId, ctx, opts) {
     if (opts.reconcileFinal !== false) {
         scheduleFinalVisibleAfterRunIfEnabled(sid, ctx, { delayMs: opts.finalDelayMs != null ? opts.finalDelayMs : 80 });
     }
+    // Runtime V2 marks the run complete before rendering the persisted final.
+    // sealProcessGroup clears currentProcessGroup, so appendMessage cannot be
+    // relied on to collapse the trace afterwards (and duplicate finals skip it
+    // altogether). Collapse while the terminal aggregate is still reachable.
+    var terminalAggregate = ctx && ctx.currentProcessGroup;
+    if (terminalAggregate && terminalAggregate.isConnected
+        && !terminalAggregate.classList.contains('subagent-grid-card')) {
+        terminalAggregate.classList.add('is-collapsed');
+        var terminalTop = terminalAggregate.querySelector('.process-aggregate-top');
+        if (terminalTop) terminalTop.setAttribute('aria-expanded', 'false');
+        updateProcessBrief(terminalAggregate);
+    }
     sealProcessGroup(ctx);
     // The process viewport is resolved through the active run context. Finish
     // its pending row-height animation and bottom pin before clearing that
@@ -276,14 +288,16 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
             if (!line.startsWith('data: ')) continue;
             const data = line.slice(6);
             if (data === '[DONE]') {
-                if (runCtx && runCtx.streamCompletedSuccessfully !== false) {
-                    runCtx.streamCompletedSuccessfully = true;
+                if (runCtx) runCtx.transportClosed = true;
+                // Transport completion is not a run outcome.  If the terminal
+                // event was lost, retain the local run and reconcile it from
+                // the versioned Runtime V2 snapshot instead of guessing success.
+                if (!runCtx || runCtx.terminalSeen !== true) {
+                    if (typeof reconcileRunStateFromServer === 'function') {
+                        void reconcileRunStateFromServer({ silent: true });
+                    }
+                    scheduleActiveSessionReconnect(runSessionId, { delayMs: 100, failure: true });
                 }
-                endRunForClient(runSessionId, runCtx, {
-                    finalDelayMs: 80,
-                    followupDelayMs: 0,
-                    drainFollowup: true,
-                });
                 return streamEventIdx;
             }
             try {
@@ -352,7 +366,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 });
                 if (reduced.runStateChanged) {
                     if (parsed.type === 'run_finished' || parsed.type === 'run_interrupted' || parsed.type === 'run_failed') {
-                        if (runCtx) runCtx.streamCompletedSuccessfully = parsed.type === 'run_finished';
+                        if (runCtx) {
+                            runCtx.terminalSeen = true;
+                            runCtx.streamCompletedSuccessfully = parsed.type === 'run_finished';
+                        }
                         if (
                             runCtx
                             && (parsed.cleanup_scope === 'none' || parsed.checkpoint_ok === false)
@@ -372,6 +389,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     }
                     syncSessionListIndicatorClasses();
                     continue;
+                }
+                if (reduced.finalStateChanged) {
+                    syncSessionListIndicatorClasses();
+                    setSendButtonState();
                 }
                 if (reduced.contextStateChanged && eventSessionId === currentSessionId) {
                     if (parsed.type === 'context_tokens') applyContextTokenLabelForCurrentSession();
@@ -488,18 +509,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                 }
                 if (parsed.type === 'final') {
                     if (eventSessionId === runSessionId) {
-                        var isFirstFinalForRun = !(runCtx && runCtx.seenFinal === true);
                         markRunFinalSeen(runCtx);
-                        // Rendering may already contain the same text from the streamed
-                        // assistant response. Completion is a state transition, so it
-                        // must happen before the render-only duplicate check below.
-                        if (isFirstFinalForRun) {
-                            markSessionResultComplete(runSessionId, 'success');
-                            endRunForClient(runSessionId, runCtx, {
-                                reconcileFinal: false,
-                                followupDelayMs: 250,
-                            });
-                        }
                     }
                     var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
                     var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
@@ -591,7 +601,10 @@ function markRunFinalSeen(ctx) {
 }
 
 function initRunFinalTracking(ctx) {
-    if (ctx) ctx.seenFinal = false;
+    if (!ctx) return;
+    ctx.seenFinal = false;
+    ctx.terminalSeen = false;
+    ctx.transportClosed = false;
 }
 
 function scheduleFinalVisibleAfterRunIfEnabled(sessionId, ctx, opts) {
@@ -934,6 +947,7 @@ async function attachSessionEventStream(sessionId, opts) {
         if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
         runCtx = newDomContext(getVisibleChatStream());
         var activeInfoForAttach = sessionStore.getActiveRunInfo(runSessionId) || {};
+        runCtx.runId = String(activeInfoForAttach.run_id || activeInfoForAttach.runId || '');
         runCtx.runStartedAt = activeInfoForAttach.started_at || new Date().toISOString();
         var existingProcessGroup = runCtx.stream.querySelector('.process-aggregate:last-of-type');
         if (existingProcessGroup) {
@@ -958,7 +972,12 @@ async function attachSessionEventStream(sessionId, opts) {
         initRunFinalTracking(runCtx);
         finalizeLlmStreamChunks(runCtx);
         const ac = new AbortController();
-        setSessionRunState(runSessionId, { controller: ac, ctx: runCtx, reattached: true });
+        setSessionRunState(runSessionId, {
+            controller: ac,
+            ctx: runCtx,
+            reattached: true,
+            runId: runCtx.runId,
+        });
         setSendButtonState();
         syncSessionListIndicatorClasses();
         liveAutoFollow = true;
@@ -2987,10 +3006,9 @@ async function sendMessage(options) {
     let submitSessionId = submitSessionIdInitial;
     if (!submitSessionId) {
         _clientStepStart = nowPipelineMs();
-        await createNewSession();
-        submitSessionId = currentSessionId;
+        submitSessionId = await materializeNewSession();
         clientTimingCtx.sessionId = submitSessionId || clientTimingCtx.sessionId;
-        reportClientPipelineStep(clientTimingCtx, 'create_new_session', _clientStepStart, { ok: !!submitSessionId });
+        reportClientPipelineStep(clientTimingCtx, 'materialize_new_session', _clientStepStart, { ok: !!submitSessionId });
         if (!submitSessionId) return;
         if (!transferSendPipelineLock(sendPipelineLock, submitSessionId)) return;
         if (ac.signal.aborted) return;
@@ -3194,6 +3212,9 @@ async function sendMessage(options) {
             }
         }
         streamEventIdx = await consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx);
+        if (!runCtx || runCtx.terminalSeen !== true) {
+            streamDisconnectedUnexpectedly = true;
+        }
         reportClientPipelineStep(clientTimingCtx, 'consume_sse_until_done', _clientStepStart, { streamEventIdx: streamEventIdx });
         return true;
     } catch (error) {
@@ -3223,7 +3244,7 @@ async function sendMessage(options) {
         } else {
             updateSubagentContinueBanner(runSessionId);
         }
-        if (getSessionRunState(runSessionId)) {
+        if (getSessionRunState(runSessionId) && runCtx && runCtx.terminalSeen === true) {
             clearSessionRunStateIfMatch(runSessionId, clientRunId);
         }
         if (streamDisconnectedUnexpectedly && runSessionId === currentSessionId && getRunAbortReason(runSessionId, runCtx) !== 'user') {

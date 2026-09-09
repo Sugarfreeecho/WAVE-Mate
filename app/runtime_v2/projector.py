@@ -330,6 +330,7 @@ class RuntimeProjector:
         elif event_type == "assistant_final_committed":
             self._append_message(snapshot, event, "assistant")
             self._commit_assistant_final_model(snapshot, event)
+            self._mark_run_finalizing(snapshot, event)
         elif event_type in {"message_assistant_delta", "message_assistant_final"}:
             self._append_or_update_assistant(snapshot, event)
         elif event_type in {"model_user", "model_assistant", "model_tool", "model_system"}:
@@ -1060,6 +1061,7 @@ class RuntimeProjector:
                 "finished_at": None,
                 "error": None,
                 "started_seq": event.seq,
+                "phase": "running",
             }
             runs[run_id] = run
         if run.get("status") in terminal_statuses and status not in terminal_statuses:
@@ -1069,6 +1071,7 @@ class RuntimeProjector:
         if not heartbeat_only:
             run["status"] = status
         if status in terminal_statuses:
+            run["phase"] = "terminal"
             run["finished_at"] = event.timestamp
             run["finished_seq"] = event.seq
             reason = str((event.payload or {}).get("reason") or "").strip()
@@ -1076,6 +1079,17 @@ class RuntimeProjector:
                 run["reason"] = reason
         if status == "failed":
             run["error"] = str((event.payload or {}).get("error") or "")
+
+    def _mark_run_finalizing(self, snapshot: dict, event: RuntimeEvent) -> None:
+        run_id = self._event_run_id(event)
+        run = snapshot.get("runs", {}).get(run_id) if run_id else None
+        if not isinstance(run, dict):
+            return
+        if run.get("status") in {"finished", "failed", "interrupted"}:
+            return
+        run["phase"] = "finalizing"
+        run["response_committed_at"] = event.timestamp
+        run["response_committed_seq"] = event.seq
 
     def _apply_subagent(self, snapshot: dict, event: RuntimeEvent) -> None:
         payload = event.payload or {}

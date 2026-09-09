@@ -161,6 +161,8 @@ def test_create_session_moves_filesystem_work_off_event_loop(monkeypatch):
             return "new-session", [], [], [], "", metadata
 
     monkeypatch.setattr(webui, "session_manager", _CreateManager())
+    invalidations = []
+    monkeypatch.setattr(webui, "_invalidate_sessions_state_cache", lambda: invalidations.append(True))
 
     response = asyncio.run(webui.create_session())
     payload = _json_response_payload(response)
@@ -169,6 +171,7 @@ def test_create_session_moves_filesystem_work_off_event_loop(monkeypatch):
     assert payload["session_id"] == "new-session"
     assert payload["session"]["id"] == "new-session"
     assert response.headers["server-timing"].startswith("session-create;dur=")
+    assert invalidations == [True]
 
 
 def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_path):
@@ -481,6 +484,22 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     })
     fake = _NoLegacyUiSessionManager(tmp_path, [{"type": "user", "content": "legacy"}])
     monkeypatch.setattr(webui, "session_manager", fake)
+    monkeypatch.setattr(
+        webui,
+        "_session_run_state_fields_light",
+        lambda _sid: {
+            "stream_active": True,
+            "run_active": True,
+            "run_started_at": "2026-09-09T00:00:00Z",
+            "active_run": {
+                "session_id": "s1",
+                "run_id": "run-history",
+                "run_active": True,
+                "phase": "finalizing",
+                "runtime_v2": True,
+            },
+        },
+    )
 
     response = asyncio.run(webui.get_session_history_snapshot(
         "s1",
@@ -513,6 +532,8 @@ def test_history_snapshot_combines_v2_messages_count_and_toc(monkeypatch, tmp_pa
     assert payload["todo_plan"]["items"][0]["text"] == "task"
     assert payload["context_tokens"]["estimated"] == 1234
     assert payload["context_tokens"]["token_source"] == "provider_exact"
+    assert payload["active_run"]["run_id"] == "run-history"
+    assert payload["active_run"]["phase"] == "finalizing"
 
 
 def test_history_snapshot_uses_lightweight_user_turns(monkeypatch, tmp_path):
@@ -1297,6 +1318,17 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
     monkeypatch.setattr(webui, "session_manager", fake)
     monkeypatch.setattr(webui, "is_run_active", lambda sid: sid == "s1")
     monkeypatch.setattr(webui, "get_run_started_at", lambda sid: "2026-01-01T00:00:00Z")
+    monkeypatch.setattr(
+        webui,
+        "get_active_run_info",
+        lambda sid: {
+            "session_id": sid,
+            "run_id": "run-1",
+            "run_active": True,
+            "started_at": "2026-01-01T00:00:00Z",
+            "phase": "running",
+        } if sid == "s1" else None,
+    )
     monkeypatch.setattr(webui, "_active_chat_by_session", {})
 
     def fail_snapshot(_sid):
@@ -1316,7 +1348,33 @@ def test_sessions_state_uses_lightweight_run_status(monkeypatch, tmp_path):
         "total": 0,
     }
     assert payload["active_runs"][0]["session_id"] == "s1"
+    assert payload["active_runs"][0]["run_id"] == "run-1"
     assert payload["active_runs"][0]["lightweight"] is True
+
+
+def test_lightweight_status_does_not_treat_terminal_transport_as_active(monkeypatch):
+    import webui
+
+    monkeypatch.setattr(
+        webui,
+        "get_active_run_info",
+        lambda _sid: {
+            "session_id": "s1",
+            "run_id": "r1",
+            "run_active": False,
+            "phase": "terminal",
+        },
+    )
+    monkeypatch.setattr(webui, "is_run_active", lambda _sid: True)
+    monkeypatch.setattr(webui, "_active_chat_by_session", {"s1": 1})
+    monkeypatch.setattr(webui, "_chat_starting_by_session", {"s1": (1.0, "r1")})
+
+    state = webui._session_run_state_fields_light("s1")
+
+    assert state["run_active"] is False
+    assert state["stream_active"] is False
+    assert state["active_run"] is None
+    assert state["stream_connections"] == 1
 
 
 def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(monkeypatch):
@@ -1365,6 +1423,54 @@ def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(m
         with webui._sessions_state_cache_lock:
             webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
             webui._sessions_state_refreshing.discard(False)
+
+
+def test_sessions_state_invalidation_keeps_stale_value_and_rejects_older_refresh(monkeypatch):
+    import webui
+
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def build(include_archived=False):
+        refresh_started.set()
+        assert release_refresh.wait(2)
+        return {"seq": 99, "sessions": [{"id": "stale"}]}
+
+    monkeypatch.setattr(webui, "_build_sessions_state_snapshot", build)
+    monkeypatch.setattr(webui, "_SESSIONS_STATE_TTL_SEC", 0.001)
+    with webui._sessions_state_cache_lock:
+        webui._sessions_state_cache[False] = {
+            "ts": 0.0,
+            "payload": {"seq": 1, "sessions": []},
+        }
+        webui._sessions_state_refreshing.discard(False)
+        webui._sessions_state_refresh_generation.pop(False, None)
+
+    try:
+        served = webui._build_sessions_state_snapshot_cached(False)
+        assert served["seq"] == 1
+        assert refresh_started.wait(1)
+
+        webui._invalidate_sessions_state_cache()
+        release_refresh.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            with webui._sessions_state_cache_lock:
+                refreshing = False in webui._sessions_state_refreshing
+            if not refreshing:
+                break
+            time.sleep(0.01)
+
+        with webui._sessions_state_cache_lock:
+            payload = webui._sessions_state_cache[False]["payload"]
+            assert payload["seq"] == 1
+            assert payload["sessions"] == []
+    finally:
+        release_refresh.set()
+        with webui._sessions_state_cache_lock:
+            webui._sessions_state_cache[False] = {"ts": 0.0, "payload": None}
+            webui._sessions_state_refreshing.discard(False)
+            webui._sessions_state_refresh_generation.pop(False, None)
 
 
 def test_sessions_state_includes_pending_human_interaction_counts(monkeypatch, tmp_path):

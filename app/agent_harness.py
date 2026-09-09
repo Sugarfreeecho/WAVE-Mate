@@ -4415,21 +4415,11 @@ class SessionManager:
             if not event_copy.get("preserve_unread_result"):
                 self.clear_session_unread_result(session_id)
         elif event_copy.get("type") == "final":
-            try:
-                from agent_goal import goal_enabled, manager_for
-
-                goal = manager_for(self).get(session_id) if goal_enabled() else None
-                goal_active = bool(goal and goal.get("status") == "active")
-            except Exception:
-                goal_active = False
-            if goal_active:
-                # A Goal final closes only the current automatic round.  Keep
-                # the session dynamic and remove any stale completion marker
-                # until the Goal itself reaches a non-active state.
-                self.clear_session_unread_result(session_id)
-            else:
-                final_status = "failed" if self._ui_event_final_is_failure(event_copy) else "success"
-                self.mark_session_unread_result(session_id, status=final_status)
+            # ``final`` commits visible assistant text, but the run can still
+            # fail in history finalization, SessionEnd hooks, or its durable
+            # terminal commit.
+            # Result attention is updated only by the terminal lifecycle path.
+            pass
         elif event_copy.get("type") in ("run_interrupted", "run_failed"):
             self.mark_session_unread_result(session_id, status="failed")
 
@@ -6583,26 +6573,6 @@ class SessionManager:
                 sess["updated_at"] = metadata["updated_at"]
                 break
         self._save_index()
-
-    @staticmethod
-    def _ui_event_final_is_failure(event: Dict[str, Any]) -> bool:
-        text = str((event or {}).get("content") or "").strip()
-        if not text:
-            return True
-        # final 事件的 content 是模型最终回复的完整正文，不能用泛化关键词做子串匹配：
-        # 正常回答中复述/解释「调用失败」「请求失败」「No result」等字样会被误判为失败。
-        # 这里只精确/前缀匹配 agent_loop 真实生成的终止或失败文案。
-        if text == "No result":
-            return True
-        if text.startswith("任务已由用户中断"):
-            return True
-        if text.startswith("检测到连续重复行为"):
-            return True
-        if text.startswith("本轮执行步骤已达到最大迭代次数"):
-            return True
-        if text.startswith("LLM 调用失败"):
-            return True
-        return False
 
     def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
         sid = self._normalize_session_id(session_id)

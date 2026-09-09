@@ -1,12 +1,27 @@
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.runtime_v2 import RuntimeEventLogBusyError, RuntimeMirror
 
 
 class RuntimeMirrorTests(unittest.TestCase):
+    def test_strict_append_surfaces_non_lock_persistence_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mirror = RuntimeMirror(tmp)
+
+            @contextmanager
+            def failing_transaction(_session_id, **_kwargs):
+                raise OSError("disk unavailable")
+                yield
+
+            mirror.event_log.session_transaction = failing_transaction
+            self.assertIsNone(mirror.append("s1", "run_finished"))
+            with self.assertRaisesRegex(OSError, "disk unavailable"):
+                mirror.append("s1", "run_finished", raise_on_error=True)
+
     def test_online_lock_timeout_is_not_silently_dropped(self):
         with tempfile.TemporaryDirectory() as tmp:
             holder = RuntimeMirror(tmp)

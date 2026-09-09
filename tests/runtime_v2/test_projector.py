@@ -41,6 +41,31 @@ class RuntimeProjectorTests(unittest.TestCase):
         self.assertEqual(snapshot["runs"]["r1"]["status"], "interrupted")
         self.assertEqual(snapshot["active_runs"], [])
 
+    def test_assistant_final_marks_run_finalizing_until_terminal(self):
+        projector = RuntimeProjector()
+        events = [
+            RuntimeEvent(seq=1, type="run_started", session_id="s1", run_id="r1"),
+            RuntimeEvent(
+                seq=2,
+                type="assistant_final_committed",
+                session_id="s1",
+                run_id="r1",
+                payload={"content": "done"},
+            ),
+        ]
+
+        snapshot = projector.project(events)
+        self.assertEqual(snapshot["runs"]["r1"]["status"], "running")
+        self.assertEqual(snapshot["runs"]["r1"]["phase"], "finalizing")
+        self.assertEqual(snapshot["runs"]["r1"]["response_committed_seq"], 2)
+        self.assertEqual(len(snapshot["active_runs"]), 1)
+
+        projector.apply(
+            snapshot,
+            RuntimeEvent(seq=3, type="run_finished", session_id="s1", run_id="r1"),
+        )
+        self.assertEqual(snapshot["runs"]["r1"]["phase"], "terminal")
+
     def test_new_run_supersedes_previous_unfinished_run(self):
         projector = RuntimeProjector()
         events = [

@@ -23,6 +23,8 @@ const LS_SESSION_UNREAD = 'myagent-session-unread';
 const sessionUnreadClearInFlight = Object.create(null);
 /** 每个会话独立的输入草稿（切换会话恢复） */
 const draftBySession = Object.create(null);
+/** 尚未落库的新会话也有稳定的本地草稿作用域。 */
+const NEW_SESSION_DRAFT_KEY = '__new_session_draft__';
 const LS_INPUT_DRAFT_PREFIX = 'myagent-input-draft-';
 const LS_FOLLOWUP_QUEUE_PREFIX = 'myagent-followup-queue-';
 const inputPathTokenMap = Object.create(null);

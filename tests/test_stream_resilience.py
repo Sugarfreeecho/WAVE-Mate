@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
@@ -381,6 +383,108 @@ def test_run_task_cancellation_is_thread_safe_across_event_loops():
     assert not session_lifecycle.is_run_active(sid)
 
 
+def test_registered_run_identity_becomes_inactive_at_durable_terminal():
+    import session_lifecycle
+
+    async def scenario():
+        sid = "run-identity-terminal"
+        blocker = asyncio.Event()
+        task = asyncio.create_task(blocker.wait())
+        session_lifecycle.register_run_task(
+            sid,
+            task,
+            run_id="run-1",
+            mode="chat",
+        )
+        try:
+            active = session_lifecycle.get_active_run_info(sid)
+            assert active and active["run_id"] == "run-1"
+            assert active["run_active"] is True
+
+            session_lifecycle.mark_run_terminal(sid, "run-1")
+            terminal = session_lifecycle.get_active_run_info(sid)
+            assert terminal and terminal["run_id"] == "run-1"
+            assert terminal["run_active"] is False
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert session_lifecycle.get_active_run_info(sid) is None
+
+    asyncio.run(scenario())
+
+
+def test_runtime_lifecycle_retries_before_exposing_terminal(monkeypatch):
+    import agent_loop
+
+    lifecycle = agent_loop._RuntimeV2RunLifecycle("s1", "r1", "chat")
+    attempts = []
+    marked = []
+
+    def append_once(event_type, payload):
+        attempts.append((event_type, dict(payload)))
+        if len(attempts) < 3:
+            raise OSError("temporary persistence failure")
+
+    monkeypatch.setattr(lifecycle, "_append_once", append_once)
+    monkeypatch.setattr(
+        "session_lifecycle.mark_run_terminal",
+        lambda session_id, run_id: marked.append((session_id, run_id)),
+    )
+
+    assert asyncio.run(lifecycle.commit("run_finished", {"mode": "chat"})) is True
+    assert len(attempts) == 3
+    assert attempts[-1][1]["mode"] == "chat"
+    assert lifecycle.terminal_event_type == "run_finished"
+    assert marked == [("s1", "r1")]
+    assert asyncio.run(lifecycle.commit("run_finished", {"mode": "chat"})) is False
+
+
+def test_runtime_lifecycle_never_marks_failed_terminal_commit(monkeypatch):
+    import agent_loop
+
+    lifecycle = agent_loop._RuntimeV2RunLifecycle("s1", "r1", "chat")
+    monkeypatch.setattr(
+        lifecycle,
+        "_append_once",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="lifecycle commit failed"):
+        asyncio.run(lifecycle.commit("run_finished"))
+    assert lifecycle.terminal_committed is False
+
+
+def test_runtime_lifecycle_accepts_only_one_concurrent_terminal(monkeypatch):
+    import agent_loop
+
+    lifecycle = agent_loop._RuntimeV2RunLifecycle("s1", "r1", "chat")
+    appended = []
+    marked = []
+    monkeypatch.setattr(
+        lifecycle,
+        "_append_once",
+        lambda event_type, _payload: appended.append(event_type),
+    )
+    monkeypatch.setattr(
+        "session_lifecycle.mark_run_terminal",
+        lambda session_id, run_id: marked.append((session_id, run_id)),
+    )
+
+    async def scenario():
+        return await asyncio.gather(
+            lifecycle.commit("run_finished"),
+            lifecycle.commit("run_interrupted"),
+        )
+
+    results = asyncio.run(scenario())
+    assert sorted(results) == [False, True]
+    assert len(appended) == 1
+    assert lifecycle.terminal_event_type == appended[0]
+    assert marked == [("s1", "r1")]
+
+
 def test_stream_detach_does_not_request_user_interrupt():
     import agent_loop
 
@@ -430,7 +534,7 @@ def test_frontend_terminal_cleanup_discards_tool_and_progress_drafts():
     assert "vis.hidden = true" in sessions_source
 
 
-def test_frontend_final_event_immediately_transitions_to_completed_indicator():
+def test_frontend_final_waits_for_authoritative_terminal_event():
     sse_source = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     shared_source = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
     reducer_source = (ROOT / "frontend/src/app/state/session-event-reducer.js").read_text(encoding="utf-8")
@@ -447,13 +551,12 @@ def test_frontend_final_event_immediately_transitions_to_completed_indicator():
 
     assert "function markSessionResultComplete(sessionId, status)" in shared_source
     assert "sessionUnreadComplete.add(sid)" in shared_source
-    assert "isFirstFinalForRun" in final_handler
-    assert final_handler.index("markSessionResultComplete(runSessionId, 'success')") < final_handler.index(
-        "hasDuplicateVisibleFinal"
-    )
-    assert final_handler.index("endRunForClient(runSessionId, runCtx") < final_handler.index(
-        "hasDuplicateVisibleFinal"
-    )
+    assert "markRunFinalSeen(runCtx);" in final_handler
+    assert "markSessionResultComplete" not in final_handler
+    assert "endRunForClient" not in final_handler
+    assert "runCtx.terminalSeen = true;" in sse_source
+    assert "Transport completion is not a run outcome" in sse_source
+    assert "sessionStore.markRunFinalizing(sessionId, finalizingRunId)" in reducer_source
     assert "markSessionResultComplete(" in reducer_source
     assert "if (!options.fromQueue) clearSessionUnreadState(submitSessionIdInitial);" in send_setup
     assert "clearSessionUnreadState(runSessionId)" not in foreground_finalizer

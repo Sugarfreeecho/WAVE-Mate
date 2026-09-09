@@ -1612,7 +1612,7 @@ function syncComposerInputState() {
     autoResizeTextarea();
     rewriteInputWorkspacePaths();
     if (hasSendableText(messageInput.value)) recentComposerQueuedFollowup = null;
-    if (currentSessionId) persistInputDraft(currentSessionId, messageInput.value);
+    persistInputDraft(currentSessionId, messageInput.value);
     if (typeof setSendButtonState === 'function') setSendButtonState();
 }
 messageInput.addEventListener('input', syncComposerInputState);

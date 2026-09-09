@@ -77,7 +77,15 @@ class RuntimeMirror:
     def mirror_run_interrupted(self, session_id: str, run_id: Optional[str] = None, payload: Optional[dict] = None) -> Optional[RuntimeEvent]:
         return self.append(session_id, "run_interrupted", payload or {}, run_id=run_id)
 
-    def append(self, session_id: str, event_type: str, payload: Optional[dict] = None, run_id: Optional[str] = None) -> Optional[RuntimeEvent]:
+    def append(
+        self,
+        session_id: str,
+        event_type: str,
+        payload: Optional[dict] = None,
+        run_id: Optional[str] = None,
+        *,
+        raise_on_error: bool = False,
+    ) -> Optional[RuntimeEvent]:
         try:
             with self.event_log.session_transaction(
                 session_id,
@@ -98,7 +106,7 @@ class RuntimeMirror:
                 event_type,
                 exc,
             )
-            if isinstance(exc, RuntimeEventLogBusyError):
+            if raise_on_error or isinstance(exc, RuntimeEventLogBusyError):
                 raise
             return None
 
