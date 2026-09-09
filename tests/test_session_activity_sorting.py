@@ -88,9 +88,10 @@ def test_user_event_side_effect_persists_activity_for_refresh(tmp_path):
     assert rows_after_refresh[0]["last_user_preview"] == "new question"
 
 
-def test_active_goal_round_final_does_not_mark_session_complete(tmp_path, monkeypatch):
+def test_active_goal_round_clears_completion_only_at_run_terminal(tmp_path, monkeypatch):
     import agent_goal
     import agent_harness
+    import agent_loop
 
     monkeypatch.setenv("GOAL_ENABLED", "1")
     monkeypatch.setenv("RUNTIME_VERSION", "2")
@@ -117,6 +118,11 @@ def test_active_goal_round_final_does_not_mark_session_complete(tmp_path, monkey
         {"type": "final", "content": "Intermediate round result"},
     )
 
+    summary = manager.get_session_summary(session_id)
+    assert summary["unread_result"] is True
+
+    monkeypatch.setattr(agent_loop, "session_manager", manager)
+    agent_loop._mark_run_terminal_unread(session_id, "run_finished")
     summary = manager.get_session_summary(session_id)
     assert summary["unread_result"] is False
 

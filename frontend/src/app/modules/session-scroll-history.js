@@ -1790,15 +1790,17 @@ function persistSessionUnread() {
 }
 
 function stashInputDraft(sessionId) {
-    if (!messageInput || !sessionId) return;
-    draftBySession[sessionId] = messageInput.value;
+    if (!messageInput) return;
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+    draftBySession[draftKey] = messageInput.value;
     persistInputDraft(sessionId, messageInput.value);
 }
 
 function restoreInputDraft(sessionId) {
     if (!messageInput) return;
-    const v = (sessionId && Object.prototype.hasOwnProperty.call(draftBySession, sessionId))
-        ? draftBySession[sessionId]
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+    const v = Object.prototype.hasOwnProperty.call(draftBySession, draftKey)
+        ? draftBySession[draftKey]
         : readStoredInputDraft(sessionId);
     messageInput.value = v != null ? String(v) : '';
     rewriteInputWorkspacePaths();
@@ -1806,13 +1808,14 @@ function restoreInputDraft(sessionId) {
 }
 
 function inputDraftStorageKey(sessionId) {
-    return LS_INPUT_DRAFT_PREFIX + String(sessionId || '');
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+    return LS_INPUT_DRAFT_PREFIX + draftKey;
 }
 
 function persistInputDraft(sessionId, value) {
-    if (!sessionId) return;
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
     const text = String(value || '');
-    draftBySession[sessionId] = text;
+    draftBySession[draftKey] = text;
     try {
         const key = inputDraftStorageKey(sessionId);
         if (text) localStorage.setItem(key, text);
@@ -1822,7 +1825,6 @@ function persistInputDraft(sessionId, value) {
 }
 
 function readStoredInputDraft(sessionId) {
-    if (!sessionId) return '';
     try {
         return localStorage.getItem(inputDraftStorageKey(sessionId)) || '';
     } catch (e) {
@@ -1831,8 +1833,8 @@ function readStoredInputDraft(sessionId) {
 }
 
 function removeStoredInputDraft(sessionId) {
-    if (!sessionId) return;
-    delete draftBySession[sessionId];
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+    delete draftBySession[draftKey];
     try { localStorage.removeItem(inputDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
     if (typeof syncSessionDraftBadges === 'function') syncSessionDraftBadges(sessionId);
 }
@@ -1841,22 +1843,6 @@ function clearStreamPoll() {
     if (streamPollTimer) {
         clearInterval(streamPollTimer);
         streamPollTimer = null;
-    }
-}
-
-async function fetchSessionStreamActiveMap() {
-    try {
-        const response = await fetch('/sessions');
-        const sessions = await response.json();
-        if (!Array.isArray(sessions)) return Object.create(null);
-        const m = Object.create(null);
-        for (let i = 0; i < sessions.length; i += 1) {
-            const s = sessions[i];
-            if (s && s.id) m[s.id] = !!s.stream_active;
-        }
-        return m;
-    } catch (e) {
-        return Object.create(null);
     }
 }
 
@@ -1877,9 +1863,12 @@ function maybeStartStreamPollForSession(sid, opts) {
                 return;
             }
             pollCount += 1;
-            const m = await fetchSessionStreamActiveMap();
-            applyServerStreamActiveMap(m);
-            const still = !!m[sid];
+            if (typeof reconcileRunStateFromServer === 'function') {
+                await reconcileRunStateFromServer({ silent: true });
+            }
+            const still = typeof isServerStreamActive === 'function'
+                ? isServerStreamActive(sid)
+                : isSessionRunning(sid);
             if (!still || pollCount >= MAX_POLL_COUNT) {
                 clearStreamPoll();
                 await loadSessions();

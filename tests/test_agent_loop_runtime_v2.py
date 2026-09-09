@@ -1175,6 +1175,7 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
     import agent_loop
 
     seen = []
+    unread_marks = []
     title_call_seen = []
     import threading
 
@@ -1197,7 +1198,17 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
         def set_session_name(self, *args, **kwargs):
             pass
 
-        def mark_session_unread_result(self, *args, **kwargs):
+        def mark_session_unread_result(self, session_id, status="success"):
+            from runtime_v2.event_log import SessionEventLog
+            from runtime_v2.projector import RuntimeProjector
+
+            committed = RuntimeProjector().project(
+                SessionEventLog(tmp_path).read_all(session_id)
+            )
+            assert committed["active_runs"] == []
+            unread_marks.append(status)
+
+        def clear_session_unread_result(self, *args, **kwargs):
             pass
 
     async def fake_run_react(state, emit):
@@ -1228,6 +1239,14 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
 
     async def collect():
         async for ev in agent_loop.astream_events("hello", session_id="s-final-first"):
+            if ev.get("type") == "run_finished":
+                from runtime_v2.event_log import SessionEventLog
+                from runtime_v2.projector import RuntimeProjector
+
+                committed = RuntimeProjector().project(
+                    SessionEventLog(tmp_path).read_all("s-final-first")
+                )
+                assert committed["active_runs"] == []
             seen.append(ev)
 
     asyncio.run(collect())
@@ -1235,6 +1254,7 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
     assert title_started.wait(timeout=2), "title generation should run in the background"
     assert any(ev.get("type") == "run_finished" for ev in seen)
     assert any(ev.get("type") == "final" and ev.get("content") == "done" for ev in seen)
+    assert unread_marks == ["success"]
     release_title.set()
     assert title_done.wait(timeout=2)
 

@@ -2200,6 +2200,25 @@ def _interrupt_terminal_text(session_id: str, *, parent: bool = False) -> str:
     return "任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续。"
 
 
+def _mark_run_terminal_unread(session_id: str, event_type: str) -> None:
+    """Update result attention only after the durable run terminal commits."""
+
+    if event_type != "run_finished":
+        session_manager.mark_session_unread_result(session_id, status="failed")
+        return
+    try:
+        from agent_goal import goal_enabled, manager_for
+
+        goal = manager_for(session_manager).get(session_id) if goal_enabled() else None
+        goal_active = bool(goal and goal.get("status") == "active")
+    except Exception:
+        goal_active = False
+    if goal_active:
+        session_manager.clear_session_unread_result(session_id)
+    else:
+        session_manager.mark_session_unread_result(session_id, status="success")
+
+
 def _runtime_v2_commit_user_turn(
     state: State,
     msg: Any,
@@ -2295,6 +2314,9 @@ def _runtime_v2_commit_assistant_final(
             run_id=run_id or None,
             model_payload={"metadata": {"is_final": True}},
         )
+        from session_lifecycle import mark_run_finalizing
+
+        mark_run_finalizing(sid, run_id)
         side_effects = getattr(session_manager, "_apply_appended_ui_event_side_effects", None)
         event = {
             "type": "final",
@@ -2399,6 +2421,224 @@ def _runtime_v2_is_primary() -> bool:
         return runtime_v2_primary()
     except Exception:
         return True
+
+
+_RUNTIME_TERMINAL_EVENT_TYPES = {
+    "run_finished",
+    "run_failed",
+    "run_interrupted",
+}
+
+
+class _RuntimeV2RunLifecycle:
+    """Single durable lifecycle writer for one run."""
+
+    def __init__(self, session_id: str, run_id: str, mode: str) -> None:
+        self.session_id = str(session_id or "").strip()
+        self.run_id = str(run_id or "").strip()
+        self.mode = str(mode or "").strip()
+        self.terminal_event_type = ""
+        self._commit_lock = asyncio.Lock()
+
+    @property
+    def terminal_committed(self) -> bool:
+        return bool(self.terminal_event_type)
+
+    def allows_stream_event(self, event_type: str) -> bool:
+        event_type = str(event_type or "")
+        return not self.terminal_committed or event_type in _RUNTIME_TERMINAL_EVENT_TYPES
+
+    def _append_once(self, event_type: str, payload: Dict[str, Any]) -> None:
+        if not _runtime_v2_is_primary():
+            return
+        from runtime_v2.mirror import RuntimeMirror
+
+        mirror = RuntimeMirror(
+            session_manager.sessions_dir,
+            path_resolver=getattr(session_manager, "_resolve_session_path", None),
+            transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
+        )
+        data = dict(payload or {})
+        if event_type in _RUNTIME_TERMINAL_EVENT_TYPES:
+            data.setdefault("operation_id", f"terminal:{self.run_id}")
+        if event_type == "run_failed":
+            data.setdefault("error", "unknown error")
+        event = mirror.append(
+            self.session_id,
+            event_type,
+            data,
+            run_id=self.run_id,
+            raise_on_error=True,
+        )
+        if event is None:
+            raise RuntimeError(
+                f"Runtime V2 lifecycle commit returned no event: {event_type} "
+                f"session={self.session_id} run_id={self.run_id}"
+            )
+
+    async def commit(
+        self,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        async with self._commit_lock:
+            return await self._commit_serialized(event_type, payload)
+
+    async def _commit_serialized(
+        self,
+        event_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        event_type = str(event_type or "")
+        is_terminal = event_type in _RUNTIME_TERMINAL_EVENT_TYPES
+        if self.terminal_committed:
+            if is_terminal and event_type == self.terminal_event_type:
+                return False
+            if is_terminal:
+                logger.warning(
+                    "suppressed conflicting terminal transition: session=%s "
+                    "run_id=%s committed=%s ignored=%s",
+                    self.session_id,
+                    self.run_id,
+                    self.terminal_event_type,
+                    event_type,
+                )
+                return False
+            logger.info(
+                "suppressed post-terminal runtime event: session=%s run_id=%s type=%s",
+                self.session_id,
+                self.run_id,
+                event_type,
+            )
+            return False
+
+        attempts = 3 if event_type in _RUNTIME_TERMINAL_EVENT_TYPES | {"run_started"} else 1
+        last_error: Optional[BaseException] = None
+        for attempt in range(attempts):
+            try:
+                await asyncio.to_thread(self._append_once, event_type, dict(payload or {}))
+                if is_terminal:
+                    self.terminal_event_type = event_type
+                    from session_lifecycle import mark_run_terminal
+
+                    mark_run_terminal(self.session_id, self.run_id)
+                return True
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    await asyncio.sleep(0.05 * (2 ** attempt))
+        raise RuntimeError(
+            f"Runtime V2 lifecycle commit failed: {event_type} "
+            f"session={self.session_id} run_id={self.run_id}"
+        ) from last_error
+
+
+async def _finalize_agent_run_lifecycle(
+    *,
+    state: State,
+    session_id: str,
+    run_id: str,
+    mode: str,
+    continuation: bool,
+    completed: bool,
+    terminal_event: Dict[str, Any],
+    runtime_lifecycle: _RuntimeV2RunLifecycle,
+    power_guard: AgentRunPowerGuard,
+    steer_control: Any,
+    emit: Callable[[Dict[str, Any]], Any],
+    queue: asyncio.Queue,
+    consumer_attached: bool,
+) -> None:
+    """Run the shared chat/continuation terminal protocol exactly once."""
+
+    try:
+        try:
+            await power_guard.close()
+        except Exception:
+            logger.warning(
+                "run power guard cleanup failed: session=%s run_id=%s",
+                session_id,
+                run_id,
+                exc_info=True,
+            )
+
+        react_limit_reached = bool(state.get("react_limit_reached"))
+        workflow_outcome = (
+            "react_limit"
+            if react_limit_reached
+            else (
+                "finished"
+                if completed
+                else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
+            )
+        )
+        try:
+            workflow_after_run = _workflow_callbacks().call(
+                "record_run_usage",
+                state,
+                continuation=continuation,
+                outcome=workflow_outcome,
+                error=(
+                    "ReAct reached the maximum iteration limit."
+                    if react_limit_reached
+                    else str(terminal_event.get("error") or "")
+                ),
+            )
+            if workflow_after_run:
+                workflow_event = _workflow_callbacks().call(
+                    "state_event", workflow_after_run, "run_accounted"
+                )
+                if workflow_event:
+                    await emit(workflow_event)
+                _workflow_callbacks().call(
+                    "sync_unread_result",
+                    session_id,
+                    workflow_after_run,
+                    workflow_outcome,
+                )
+        except Exception:
+            logger.warning(
+                "post-run workflow accounting failed: session=%s run_id=%s",
+                session_id,
+                run_id,
+                exc_info=True,
+            )
+
+        _clear_steer_run_control(session_id, steer_control)
+        if completed:
+            terminal_event = {
+                "type": "run_finished",
+                "run_id": run_id,
+                "ephemeral": True,
+            }
+        terminal_type = str(terminal_event.get("type") or "run_interrupted")
+        terminal_payload = {
+            key: value
+            for key, value in terminal_event.items()
+            if key not in {"type", "ephemeral", "run_id"}
+        }
+        terminal_payload.setdefault("mode", mode)
+        await runtime_lifecycle.commit(terminal_type, terminal_payload)
+        _mark_run_terminal_unread(session_id, terminal_type)
+        await emit(terminal_event)
+
+        try:
+            execution_metrics.finish_run(
+                session_id,
+                run_id,
+                "react_limit" if react_limit_reached else workflow_outcome,
+            )
+        except Exception:
+            logger.warning(
+                "run metrics finalization failed: session=%s run_id=%s",
+                session_id,
+                run_id,
+                exc_info=True,
+            )
+    finally:
+        await close_session_stream(session_id)
+        if consumer_attached:
+            await queue.put(None)
 
 
 def _persist_state_with_model_append(state: State, msg: Any) -> None:
@@ -8891,47 +9131,11 @@ async def astream_events(
 
     queue: asyncio.Queue = asyncio.Queue()
     consumer_attached = True
-    runtime_v2_terminal_mirrored = False
-
-    def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        if not _runtime_v2_is_primary():
-            return
-        try:
-            from runtime_v2.mirror import RuntimeMirror
-
-            mirror = RuntimeMirror(
-                session_manager.sessions_dir,
-                path_resolver=getattr(session_manager, "_resolve_session_path", None),
-                transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
-            )
-            if event_type == "run_started":
-                mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_finished":
-                mirror.mirror_run_finished(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_interrupted":
-                mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_failed":
-                mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
-            else:
-                mirror.append(session_id, event_type, payload or {}, run_id=runtime_v2_run_id)
-        except Exception as mirror_error:
-            logger.debug("Runtime V2 mirror run event failed: %s", mirror_error)
-
-    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        nonlocal runtime_v2_terminal_mirrored
-        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
-            logger.info(
-                "suppressed post-terminal runtime event: session=%s run_id=%s type=%s",
-                session_id,
-                runtime_v2_run_id,
-                event_type,
-            )
-            return
-        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
-            if runtime_v2_terminal_mirrored:
-                return
-            runtime_v2_terminal_mirrored = True
-        mirror_runtime_v2_sync(event_type, dict(payload or {}))
+    runtime_lifecycle = _RuntimeV2RunLifecycle(
+        session_id,
+        runtime_v2_run_id,
+        "chat",
+    )
 
     async def emit(ev: Dict[str, Any]) -> None:
         # 与浏览器 SSE 一致；ephemeral（如 llm_*_delta）仅实时推送，不写入 ui_events
@@ -8939,7 +9143,7 @@ async def astream_events(
         ev = dict(ev)
         ev.setdefault("run_id", runtime_v2_run_id)
         event_type = str(ev.get("type") or "")
-        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+        if not runtime_lifecycle.allows_stream_event(event_type):
             logger.info(
                 "suppressed post-terminal stream event: session=%s run_id=%s type=%s",
                 session_id,
@@ -9008,7 +9212,7 @@ async def astream_events(
             )
             power_guard.monitor.mark_progress()
             return
-        await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
+        await runtime_lifecycle.commit("runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
             "content": (
@@ -9042,7 +9246,7 @@ async def astream_events(
             # 用户气泡由前端已画；此处只写入与流顺序一致的持久化，供刷新与 SSE 同源
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
-            mirror_runtime_v2("run_started", {"mode": "chat"})
+            await runtime_lifecycle.commit("run_started", {"mode": "chat"})
             run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log(
                 "run_start_step_timing",
@@ -9221,8 +9425,7 @@ async def astream_events(
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "run_id": runtime_v2_run_id, "ephemeral": True}
             cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
-            mirror_runtime_v2("run_interrupted", {"reason": cancel_reason})
-            session_manager.mark_session_unread_result(session_id, status="failed")
+            terminal_event["reason"] = cancel_reason
             raise
         except Exception as exc:
             try:
@@ -9235,71 +9438,48 @@ async def astream_events(
             except Exception:
                 logger.debug("RunFailed Hook dispatch failed", exc_info=True)
             terminal_event = {"type": "run_failed", "run_id": runtime_v2_run_id, "error": str(exc), "ephemeral": True}
-            mirror_runtime_v2("run_failed", {"error": str(exc)})
-            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
-            await power_guard.close()
-            react_limit_reached = bool(state.get("react_limit_reached"))
-            workflow_outcome = (
-                "react_limit"
-                if react_limit_reached
-                else ("finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"))
-            )
-            workflow_after_run = _workflow_callbacks().call("record_run_usage",
-                state,
+            await _finalize_agent_run_lifecycle(
+                state=state,
+                session_id=session_id,
+                run_id=runtime_v2_run_id,
+                mode="chat",
                 continuation=False,
-                outcome=workflow_outcome,
-                error=(
-                    "ReAct reached the maximum iteration limit."
-                    if react_limit_reached
-                    else str(terminal_event.get("error") or "")
-                ),
+                completed=completed,
+                terminal_event=terminal_event,
+                runtime_lifecycle=runtime_lifecycle,
+                power_guard=power_guard,
+                steer_control=steer_control,
+                emit=emit,
+                queue=queue,
+                consumer_attached=consumer_attached,
             )
-            if workflow_after_run:
-                workflow_event = _workflow_callbacks().call(
-                    "state_event", workflow_after_run, "run_accounted"
-                )
-                if workflow_event:
-                    await emit(workflow_event)
-                _workflow_callbacks().call(
-                    "sync_unread_result", session_id, workflow_after_run, workflow_outcome
-                )
-            execution_metrics.finish_run(
-                session_id,
-                runtime_v2_run_id,
-                "react_limit" if react_limit_reached else (
-                    "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
-                ),
-            )
-            _clear_steer_run_control(session_id, steer_control)
-            if completed:
-                mirror_runtime_v2("run_finished", {"mode": "chat"})
-                terminal_event = {"type": "run_finished", "run_id": runtime_v2_run_id, "ephemeral": True}
-            await emit(terminal_event)
-            await close_session_stream(session_id)
-            if consumer_attached:
-                await queue.put(None)
 
     task = asyncio.create_task(runner())
     from session_lifecycle import register_run_task
 
-    register_run_task(session_id, task)
+    register_run_task(
+        session_id,
+        task,
+        run_id=runtime_v2_run_id,
+        mode="chat",
+    )
     cancel_requested_by_consumer = False
     try:
         while True:
             if should_stop and should_stop(session_id):
                 reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
                 if reason == "followup":
-                    mirror_runtime_v2("run_interrupted", {"reason": reason})
+                    await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True
                     break
                 terminal_text = _interrupt_terminal_text(session_id)
                 ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
                 ev2 = {"type": "final", "content": terminal_text}
-                mirror_runtime_v2("run_interrupted", {"reason": reason})
-                session_manager.mark_session_unread_result(session_id, status="failed")
+                await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
+                _mark_run_terminal_unread(session_id, "run_interrupted")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1
@@ -9452,53 +9632,17 @@ async def astream_events_continuation(
 
     queue: asyncio.Queue = asyncio.Queue()
     consumer_attached = True
-    runtime_v2_terminal_mirrored = False
-
-    def mirror_runtime_v2_sync(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        if not _runtime_v2_is_primary():
-            return
-        try:
-            from runtime_v2.mirror import RuntimeMirror
-
-            mirror = RuntimeMirror(
-                session_manager.sessions_dir,
-                path_resolver=getattr(session_manager, "_resolve_session_path", None),
-                transaction_timeout_seconds=_runtime_v2_react_transaction_timeout_seconds(),
-            )
-            if event_type == "run_started":
-                mirror.mirror_run_started(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_finished":
-                mirror.mirror_run_finished(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_interrupted":
-                mirror.mirror_run_interrupted(session_id, runtime_v2_run_id, payload)
-            elif event_type == "run_failed":
-                mirror.mirror_run_failed(session_id, str((payload or {}).get("error") or "unknown error"), runtime_v2_run_id, payload)
-            else:
-                mirror.append(session_id, event_type, payload or {}, run_id=runtime_v2_run_id)
-        except Exception as mirror_error:
-            logger.debug("Runtime V2 mirror continuation run event failed: %s", mirror_error)
-
-    def mirror_runtime_v2(event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
-        nonlocal runtime_v2_terminal_mirrored
-        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
-            logger.info(
-                "suppressed post-terminal continuation runtime event: session=%s run_id=%s type=%s",
-                session_id,
-                runtime_v2_run_id,
-                event_type,
-            )
-            return
-        if event_type in {"run_finished", "run_interrupted", "run_failed"}:
-            if runtime_v2_terminal_mirrored:
-                return
-            runtime_v2_terminal_mirrored = True
-        mirror_runtime_v2_sync(event_type, dict(payload or {}))
+    runtime_lifecycle = _RuntimeV2RunLifecycle(
+        session_id,
+        runtime_v2_run_id,
+        "continuation",
+    )
 
     async def emit(ev: Dict[str, Any]) -> None:
         ev = dict(ev)
         ev.setdefault("run_id", runtime_v2_run_id)
         event_type = str(ev.get("type") or "")
-        if runtime_v2_terminal_mirrored and event_type not in {"run_finished", "run_interrupted", "run_failed"}:
+        if not runtime_lifecycle.allows_stream_event(event_type):
             logger.info(
                 "suppressed post-terminal continuation stream event: session=%s run_id=%s type=%s",
                 session_id,
@@ -9559,7 +9703,7 @@ async def astream_events_continuation(
             )
             power_guard.monitor.mark_progress()
             return
-        await asyncio.to_thread(mirror_runtime_v2, "runtime_resumed", payload)
+        await runtime_lifecycle.commit("runtime_resumed", payload)
         await emit({
             "type": "runtime_resumed",
             "content": (
@@ -9587,7 +9731,7 @@ async def astream_events_continuation(
             state["_run_start_perf"] = time.perf_counter()
             run_start_timings: Dict[str, int] = {}
             _t_run_start = time.perf_counter()
-            mirror_runtime_v2("run_started", {"mode": "continuation"})
+            await runtime_lifecycle.commit("run_started", {"mode": "continuation"})
             run_start_timings["mirror_run_started"] = _timing_ms(_t_run_start)
             _pipeline_step_timing_log("run_start_step_timing", session_id, "mirror_run_started", run_start_timings["mirror_run_started"], run_id=runtime_v2_run_id, mode="continuation")
             _t_run_start = time.perf_counter()
@@ -9710,8 +9854,7 @@ async def astream_events_continuation(
         except asyncio.CancelledError:
             terminal_event = {"type": "run_interrupted", "ephemeral": True}
             cancel_reason = session_manager.get_interrupt_reason(session_id) or "cancelled"
-            mirror_runtime_v2("run_interrupted", {"reason": cancel_reason})
-            session_manager.mark_session_unread_result(session_id, status="failed")
+            terminal_event["reason"] = cancel_reason
             raise
         except Exception as exc:
             try:
@@ -9728,71 +9871,48 @@ async def astream_events_continuation(
             except Exception:
                 logger.debug("RunFailed Hook dispatch failed", exc_info=True)
             terminal_event = {"type": "run_failed", "error": str(exc), "ephemeral": True}
-            mirror_runtime_v2("run_failed", {"error": str(exc)})
-            session_manager.mark_session_unread_result(session_id, status="failed")
             raise
         finally:
-            await power_guard.close()
-            react_limit_reached = bool(state.get("react_limit_reached"))
-            workflow_outcome = (
-                "react_limit"
-                if react_limit_reached
-                else ("finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted"))
-            )
-            workflow_after_run = _workflow_callbacks().call("record_run_usage",
-                state,
+            await _finalize_agent_run_lifecycle(
+                state=state,
+                session_id=session_id,
+                run_id=runtime_v2_run_id,
+                mode="continuation",
                 continuation=True,
-                outcome=workflow_outcome,
-                error=(
-                    "ReAct reached the maximum iteration limit."
-                    if react_limit_reached
-                    else str(terminal_event.get("error") or "")
-                ),
+                completed=completed,
+                terminal_event=terminal_event,
+                runtime_lifecycle=runtime_lifecycle,
+                power_guard=power_guard,
+                steer_control=steer_control,
+                emit=emit,
+                queue=queue,
+                consumer_attached=consumer_attached,
             )
-            if workflow_after_run:
-                workflow_event = _workflow_callbacks().call(
-                    "state_event", workflow_after_run, "run_accounted"
-                )
-                if workflow_event:
-                    await emit(workflow_event)
-                _workflow_callbacks().call(
-                    "sync_unread_result", session_id, workflow_after_run, workflow_outcome
-                )
-            execution_metrics.finish_run(
-                session_id,
-                runtime_v2_run_id,
-                "react_limit" if react_limit_reached else (
-                    "finished" if completed else ("failed" if terminal_event.get("type") == "run_failed" else "interrupted")
-                ),
-            )
-            _clear_steer_run_control(session_id, steer_control)
-            if completed:
-                mirror_runtime_v2("run_finished", {"mode": "continuation"})
-                terminal_event = {"type": "run_finished", "ephemeral": True}
-            await emit(terminal_event)
-            await close_session_stream(session_id)
-            if consumer_attached:
-                await queue.put(None)
 
     task = asyncio.create_task(runner())
     from session_lifecycle import register_run_task
 
-    register_run_task(session_id, task)
+    register_run_task(
+        session_id,
+        task,
+        run_id=runtime_v2_run_id,
+        mode="continuation",
+    )
     cancel_requested_by_consumer = False
     try:
         while True:
             if should_stop and should_stop(session_id):
                 reason = session_manager.get_interrupt_reason(session_id) or "unspecified"
                 if reason == "followup":
-                    mirror_runtime_v2("run_interrupted", {"reason": reason})
+                    await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
                     task.cancel()
                     cancel_requested_by_consumer = True
                     break
                 terminal_text = _interrupt_terminal_text(session_id)
                 ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
                 ev2 = {"type": "final", "content": terminal_text}
-                mirror_runtime_v2("run_interrupted", {"reason": reason})
-                session_manager.mark_session_unread_result(session_id, status="failed")
+                await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
+                _mark_run_terminal_unread(session_id, "run_interrupted")
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1

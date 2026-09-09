@@ -42,9 +42,10 @@ async function init() {
     const sessions = sessionStore.list();
     let lastSessionId = localStorage.getItem('lastSessionId');
     let targetSession = null;
-    if (lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
-    else if (!sessionsLoaded && lastSessionId) targetSession = lastSessionId;
-    else if (sessions.length > 0) targetSession = sessions[0].id;
+    const restoreNewSessionDraft = lastSessionId === NEW_SESSION_DRAFT_KEY;
+    if (!restoreNewSessionDraft && lastSessionId && sessions.some(s => s.id === lastSessionId)) targetSession = lastSessionId;
+    else if (!restoreNewSessionDraft && !sessionsLoaded && lastSessionId) targetSession = lastSessionId;
+    else if (!restoreNewSessionDraft && sessions.length > 0) targetSession = sessions[0].id;
     // Restore durable approvals/questions before switchSession decides whether
     // the global pending banner should be hidden for the selected session.
     if (targetSession && typeof refreshHumanInteractions === 'function') {

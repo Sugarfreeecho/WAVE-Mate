@@ -1,5 +1,8 @@
 function applySessionSnapshot(snapshot) {
     snapshot = snapshot || {};
+    const requestSeq = Number(snapshot.client_request_seq || 0);
+    if (requestSeq > 0 && requestSeq < sessionStore.lastAppliedSnapshotRequestSeq) return false;
+    if (requestSeq > 0) sessionStore.lastAppliedSnapshotRequestSeq = requestSeq;
     const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
     const archivedCount = snapshot.archived_count != null ? snapshot.archived_count : snapshot.archivedCount;
     const previousActive = new Set();
@@ -35,6 +38,7 @@ function applySessionSnapshot(snapshot) {
             recoverFollowupQueueDrainsFromSessionSnapshot(previousActive, new Set(Object.keys(active)));
         }
     }
+    return true;
 }
 
 function applySessionPatch(patch) {

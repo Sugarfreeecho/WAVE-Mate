@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ _lock = threading.Lock()
 _deleted: Set[str] = set()
 _run_tasks: Dict[str, Set[asyncio.Task]] = {}
 _run_started_at: Dict[str, str] = {}
+_run_info_by_task: Dict[asyncio.Task, Dict[str, Any]] = {}
 
 
 def mark_session_deleted(session_id: str) -> None:
@@ -34,16 +35,33 @@ def is_session_deleted(session_id: str) -> bool:
         return bool(sid) and sid in _deleted
 
 
-def register_run_task(session_id: str, task: asyncio.Task) -> None:
+def register_run_task(
+    session_id: str,
+    task: asyncio.Task,
+    *,
+    run_id: str = "",
+    mode: str = "",
+) -> None:
     sid = (session_id or "").strip()
     if not sid or task is None:
         return
+    started_at = datetime.now(timezone.utc).isoformat()
     with _lock:
         _run_tasks.setdefault(sid, set()).add(task)
-        _run_started_at.setdefault(sid, datetime.now(timezone.utc).isoformat())
+        _run_started_at.setdefault(sid, started_at)
+        _run_info_by_task[task] = {
+            "session_id": sid,
+            "run_id": str(run_id or "").strip(),
+            "mode": str(mode or "").strip(),
+            "started_at": started_at,
+            "run_active": True,
+            "phase": "running",
+            "runtime_v2": True,
+        }
 
     def _on_done(t: asyncio.Task) -> None:
         with _lock:
+            _run_info_by_task.pop(t, None)
             bucket = _run_tasks.get(sid)
             if not bucket:
                 return
@@ -70,6 +88,66 @@ def get_run_started_at(session_id: str) -> Optional[str]:
         return None
     with _lock:
         return _run_started_at.get(sid)
+
+
+def get_active_run_info(session_id: str) -> Optional[Dict[str, Any]]:
+    """Return the newest live task's run identity and lifecycle phase.
+
+    Connection counters are deliberately excluded: an attached or half-closed
+    SSE transport is not a lifecycle fact.  Status snapshots use this identity
+    so a stale local-task observation cannot reopen the same run after a
+    durable terminal event has reached the browser.
+    """
+
+    sid = (session_id or "").strip()
+    if not sid:
+        return None
+    with _lock:
+        tasks = list(_run_tasks.get(sid, ()))
+        rows = [
+            dict(_run_info_by_task.get(task) or {})
+            for task in tasks
+            if task is not None and not task.done() and _run_info_by_task.get(task)
+        ]
+    if not rows:
+        return None
+    active_rows = [row for row in rows if bool(row.get("run_active", True))]
+    candidates = active_rows or rows
+    return max(candidates, key=lambda row: str(row.get("started_at") or ""))
+
+
+def mark_run_terminal(session_id: str, run_id: str) -> None:
+    """Stop exposing a task as active once its durable terminal has committed."""
+
+    sid = (session_id or "").strip()
+    rid = str(run_id or "").strip()
+    if not sid or not rid:
+        return
+    with _lock:
+        for task in list(_run_tasks.get(sid, ())):
+            info = _run_info_by_task.get(task)
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("run_id") or "").strip() != rid:
+                continue
+            info["run_active"] = False
+            info["phase"] = "terminal"
+
+
+def mark_run_finalizing(session_id: str, run_id: str) -> None:
+    """Expose that output is committed while the run completes critical work."""
+
+    sid = (session_id or "").strip()
+    rid = str(run_id or "").strip()
+    if not sid or not rid:
+        return
+    with _lock:
+        for task in list(_run_tasks.get(sid, ())):
+            info = _run_info_by_task.get(task)
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("run_id") or "").strip() == rid and info.get("run_active", True):
+                info["phase"] = "finalizing"
 
 
 async def _cancel_tasks(tasks: List[asyncio.Task], timeout: float = 8.0) -> None:

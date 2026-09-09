@@ -63,11 +63,11 @@ function reconcileSelectedSkillsWithEnabledCatalog() {
 }
 
 function skillDraftStorageKey(sessionId) {
-    return LS_SKILL_DRAFT_PREFIX + String(sessionId || '');
+    const draftKey = sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY;
+    return LS_SKILL_DRAFT_PREFIX + draftKey;
 }
 
 function persistSkillPickerDraft(sessionId) {
-    if (!sessionId) return;
     try {
         var key = skillDraftStorageKey(sessionId);
         if (selectedSkillNames.length) localStorage.setItem(key, JSON.stringify(selectedSkillNames));
@@ -76,7 +76,6 @@ function persistSkillPickerDraft(sessionId) {
 }
 
 function readStoredSkillPickerDraft(sessionId) {
-    if (!sessionId) return [];
     try {
         var raw = localStorage.getItem(skillDraftStorageKey(sessionId));
         var parsed = raw ? JSON.parse(raw) : [];
@@ -88,7 +87,6 @@ function readStoredSkillPickerDraft(sessionId) {
 }
 
 function removeStoredSkillPickerDraft(sessionId) {
-    if (!sessionId) return;
     try { localStorage.removeItem(skillDraftStorageKey(sessionId)); } catch (e) { /* ignore */ }
 }
 

@@ -338,7 +338,8 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
     assert "if (eventSessionId === runSessionId) {" in sse
     assert "markRunFinalSeen(runCtx);" in sse
-    assert "markSessionResultComplete(runSessionId, 'success');" in sse
+    assert "runCtx.terminalSeen = true;" in sse
+    assert "Transport completion is not a run outcome" in sse
     assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
     assert "function fetchLatestStoredFinalRecord" not in sse
     assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
@@ -597,6 +598,8 @@ def test_frontend_session_load_lets_snapshot_own_toc_build():
     assert "if (!opts.tocAlreadyStarted) rebuildToc();" in sessions
     assert "/history_snapshot?turns=" in sessions
     assert "setTocTurnsForSession(sessionId, snapshot.user_turns)" in sessions
+    assert "sessionStore.applyActiveRunForSession(" in sessions
+    assert "snapshot.active_run || (__snapActive ?" in sessions
     assert "snapshot.todo_plan" not in sessions
     assert "renderLoadedTodoPlanForSession" not in sessions
     assert "opts.useSnapshot === false && typeof startTocForSessionLoad === 'function'" in sessions
@@ -637,8 +640,10 @@ def test_running_pending_turn_keeps_a_pulsing_completed_result_indicator():
     )[0]
     assert "if (running)" in indicator
     assert "itemDiv.classList.add(failed ? 'is-unread-failed' : 'is-unread-result')" in indicator
-    assert "已有任务完成，仍在生成" in indicator
+    assert "已有任务完成，当前任务仍在处理" in indicator
+    assert "回复已生成，正在收尾" in indicator
     assert ".session-item.is-generating.is-unread-result" in styles
+    assert ".session-item.is-finalizing .session-name::before" in styles
     assert "formData.append('preserve_unread_result', 'true')" in sse
     assert "preserve_unread_result: bool = Form(False)" in webui
     assert "preserve_unread_result=preserve_unread_result" in webui
@@ -960,20 +965,34 @@ def test_frontend_session_scoped_token_and_count_guards():
     assert "parsed.type === 'cache_stats' && eventSessionId === currentSessionId" in sse
 
 
-def test_frontend_new_session_renders_immediately_and_coalesces_creation():
+def test_frontend_new_session_is_local_until_first_send_and_coalesces_materialization():
     sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
-    body = sessions.split("async function createNewSession()", 1)[1]
-    body = body.split("async function createNewSessionInner()", 1)[1]
+    sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
+    shared = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(encoding="utf-8")
+    scroll = (ROOT / "frontend/src/app/modules/session-scroll-history.js").read_text(encoding="utf-8")
+    skills = (ROOT / "frontend/src/app/modules/skill-picker.js").read_text(encoding="utf-8")
+    rendering = (ROOT / "frontend/src/app/modules/message-rendering.js").read_text(encoding="utf-8")
+    layout = (ROOT / "frontend/src/app/modules/layout-panels.js").read_text(encoding="utf-8")
+    draft_body = sessions.split("async function createNewSession()", 1)[1].split(
+        "async function materializeNewSession()", 1
+    )[0]
+    materialize_body = sessions.split("async function materializeNewSession()", 1)[1]
 
-    assert "let createNewSessionQueue = null;" in sessions
-    assert "if (createNewSessionQueue) return createNewSessionQueue;" in sessions
-    assert "if (newSessionBtn) newSessionBtn.disabled = true;" in sessions
-    assert "if (!response.ok) throw new Error('HTTP ' + response.status);" in body
-    assert body.index("setCurrentSessionState(null);") < body.index("await fetch('/sessions'")
-    assert body.index("setWelcome();") < body.index("await fetch('/sessions'")
-    assert "renderSessionListIfChanged(false);" in body
-    # setCurrentSessionState already refreshes the global permission selector.
-    assert "refreshPermissionModeSelector(currentSessionId)" not in body
+    assert "let materializeNewSessionQueue = null;" in sessions
+    assert "await fetch('/sessions'" not in draft_body
+    assert "setCurrentSessionState(null);" in draft_body
+    assert "setWelcome();" in draft_body
+    assert "restoreInputDraft(null);" in draft_body
+    assert "if (materializeNewSessionQueue) return materializeNewSessionQueue;" in materialize_body
+    assert "await fetch('/sessions', { method: 'POST' })" in materialize_body
+    assert "sessionStore.protectFromSnapshots(session);" in materialize_body
+    assert "restoreInputDraft(sessionId)" not in materialize_body
+    assert "submitSessionId = await materializeNewSession();" in sse
+    assert "const NEW_SESSION_DRAFT_KEY = '__new_session_draft__';" in shared
+    assert "sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY" in scroll
+    assert "sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY" in skills
+    assert "persistInputDraft(currentSessionId, messageInput.value);" in rendering
+    assert "lastSessionId === NEW_SESSION_DRAFT_KEY" in layout
 
 
 def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():
@@ -1046,8 +1065,7 @@ def test_frontend_loaded_session_defers_layout_refresh_until_smooth_bottom_finis
 def test_frontend_completed_background_stream_remains_reusable_for_green_dot_restore():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
 
-    assert "runCtx.streamCompletedSuccessfully !== false" in sse
-    assert "runCtx.streamCompletedSuccessfully = true;" in sse
+    assert "runCtx.terminalSeen = true;" in sse
     assert "runCtx.streamCompletedSuccessfully = parsed.type === 'run_finished';" in sse
     assert "const reusableCompletedCache = !!(" in sse
     assert "runCtx.seenFinal === true" in sse
@@ -1081,7 +1099,7 @@ def test_frontend_run_state_cleanup_is_run_id_scoped():
     assert "runCtx.runId = clientRunId;" in sse
     assert "clearSessionRunStateIfMatch(runSessionId, clientRunId)" in sse
     assert "clearSessionRunStateIfMatch(sid, opts.runId || (ctx && ctx.runId))" in sse
-    assert "run && (run.reattached || staleSubmittedStream)" in sessions
+    assert "run && (run.reattached || staleSubmittedStream || run.transportClosed)" in sessions
     assert "run.submitted && run.ctx && run.ctx.streamConsuming" in sessions
     assert "abortSessionRun(sid, 'reconcile-finished')" in sessions
 

@@ -786,6 +786,12 @@ body {
     margin-right: 5px; box-shadow: 0 0 8px rgba(249,226,175,0.5);
     vertical-align: 0.08em; animation: pulse-dot 1.4s ease-in-out infinite;
 }
+.session-item.is-finalizing .session-name::before {
+    content: ''; display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--accent-1);
+    margin-right: 5px; box-shadow: 0 0 7px color-mix(in srgb, var(--accent-1) 45%, transparent);
+    vertical-align: 0.08em;
+}
 .session-item.has-plugin-activity .session-name::before {
     content: ''; display: inline-block; width: 6px; height: 6px;
     border-radius: 50%; background: var(--amber-accent);

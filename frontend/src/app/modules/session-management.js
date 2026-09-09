@@ -3,7 +3,7 @@
     sendBtn.disabled = false;
     const uploadBusy = isChatFileUploadBusy();
     const newSessionPreflight = !currentSessionId && optimisticNewSessionRun;
-    const newSessionCreating = !currentSessionId && createNewSessionQueue;
+    const newSessionCreating = !currentSessionId && materializeNewSessionQueue;
     if (uploadBusy) {
         sendBtn.textContent = '上传中';
         sendBtn.classList.remove('is-stop');
@@ -196,7 +196,7 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     opts = opts || {};
     if (!itemDiv || !sessionId) return;
     syncSessionDraftBadge(itemDiv, sessionId);
-    itemDiv.classList.remove('is-generating', 'is-unread-result', 'is-unread-failed');
+    itemDiv.classList.remove('is-generating', 'is-finalizing', 'is-unread-result', 'is-unread-failed');
     var nameEl = itemDiv.querySelector('.session-name');
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     var sess = sessionStore.get(sessionId);
@@ -204,8 +204,9 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
     var failed = !!(sess && sess.unread_result_status === 'failed');
     var running = isSessionRunning(sessionId);
+    var finalizing = running && sessionStore.isRunFinalizing(sessionId);
     if (running) {
-        itemDiv.classList.add('is-generating');
+        itemDiv.classList.add(finalizing ? 'is-finalizing' : 'is-generating');
         if (hasUnreadResult) {
             // A completed queued turn is still unread while the next pending
             // turn is running. Combining the classes keeps the pulse animation
@@ -216,8 +217,8 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
             nameEl.setAttribute(
                 'data-ui-tip',
                 hasUnreadResult
-                    ? (failed ? '已有任务失败，仍在生成' : '已有任务完成，仍在生成')
-                    : '生成中'
+                    ? (failed ? '已有任务失败，当前任务仍在处理' : '已有任务完成，当前任务仍在处理')
+                    : (finalizing ? '回复已生成，正在收尾' : '生成中')
             );
         }
     } else {
@@ -658,9 +659,15 @@ async function refreshSingleSessionRow(sessionId) {
         applySessionPatch({
             session: sess,
             session_id: sess.id,
-            stream_active: !!sess.stream_active,
         });
-        setSessionServerStreamActive(sess.id, !!sess.stream_active);
+        sessionStore.applyActiveRunForSession(
+            sess.id,
+            sess.active_run || (sess.run_active ? {
+                session_id: sess.id,
+                run_active: true,
+                started_at: sess.run_started_at || null,
+            } : null)
+        );
         if (sess.unread_result) {
             if (!sessionUnreadComplete.has(sess.id)) {
                 sessionUnreadComplete.add(sess.id);
@@ -685,7 +692,7 @@ async function refreshSingleSessionRow(sessionId) {
 let sessionListLoadEpoch = 0;
 let sessionListLoadPromise = null;
 let sessionListRenderKey = '';
-let createNewSessionQueue = null;
+let materializeNewSessionQueue = null;
 let archivedSessionsLoaded = false;
 let archivedSessionsCache = null;
 let archivedSessionsCount = 0;
@@ -856,6 +863,7 @@ const uiEventCountCache = {
 
 async function fetchSessionsStateSnapshot(opts) {
     opts = opts || {};
+    const requestSeq = ++sessionStore.snapshotRequestSeq;
     const url = '/sessions/state' + (opts.includeArchived ? '?include_archived=true' : '');
     const response = await fetchWithTimeout(url, {}, 12000);
     if (!response.ok) throw new Error('sessions state failed: ' + response.status);
@@ -864,6 +872,7 @@ async function fetchSessionsStateSnapshot(opts) {
         throw new Error('invalid sessions state response');
     }
     snapshot.include_archived = !!opts.includeArchived;
+    snapshot.client_request_seq = requestSeq;
     return snapshot;
 }
 
@@ -1084,6 +1093,7 @@ async function loadSessionsInner(opts) {
             allSessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
         } catch (stateErr) {
             console.error('加载会话状态快照失败，回退至旧接口', stateErr);
+            const fallbackRequestSeq = ++sessionStore.snapshotRequestSeq;
             const response = await fetchWithTimeout('/sessions', {}, 12000);
             const archivedCountHeader = response.headers.get('X-Archived-Count');
             if (archivedCountHeader != null && archivedCountHeader !== '') {
@@ -1100,6 +1110,7 @@ async function loadSessionsInner(opts) {
             snapshot = {
                 sessions: allSessions,
                 archived_count: archivedSessionsCount,
+                client_request_seq: fallbackRequestSeq,
             };
         }
         applySessionSnapshot(snapshot || { sessions: allSessions, archived_count: archivedSessionsCount });
@@ -1197,7 +1208,7 @@ async function reconcileRunStateFromServer(opts) {
             var staleSubmittedStream = !!(
                 run && run.submitted && run.ctx && run.ctx.streamConsuming
             );
-            if (run && (run.reattached || staleSubmittedStream)) {
+            if (run && (run.reattached || staleSubmittedStream || run.transportClosed)) {
                 abortSessionRun(sid, 'reconcile-finished');
             }
         }
@@ -1301,14 +1312,15 @@ async function loadSessionMessages(sessionId, scrollBehavior, opts) {
                         }
                         if (typeof snapshot.stream_active === 'boolean' || typeof snapshot.run_active === 'boolean') {
                             const __snapActive = !!(snapshot.stream_active || snapshot.run_active);
-                            if (typeof setSessionServerStreamActive === 'function') setSessionServerStreamActive(sessionId, __snapActive);
-                            if (typeof applySessionPatch === 'function') {
-                                try { applySessionPatch({ session_id: sessionId, stream_active: __snapActive }); } catch (e) {}
-                            }
-                            try {
-                                const __sess = sessionStore.get(sessionId);
-                                if (__sess) { __sess.stream_active = __snapActive; __sess.run_active = __snapActive; }
-                            } catch (e) {}
+                            sessionStore.applyActiveRunForSession(
+                                sessionId,
+                                snapshot.active_run || (__snapActive ? {
+                                    session_id: sessionId,
+                                    run_active: true,
+                                    started_at: snapshot.run_started_at || null,
+                                    runtime_v2: snapshot.source === 'runtime_v2_snapshot',
+                                } : null)
+                            );
                         }
                     }
                     }
@@ -1744,77 +1756,106 @@ async function switchSession(sessionId, opts) {
 }
 
 async function createNewSession() {
-    // Coalesce double-clicks and callers that race during initial startup.
-    // Serially queuing them created multiple blank sessions and prolonged the
-    // time before the first one became usable.
-    if (createNewSessionQueue) return createNewSessionQueue;
-    if (newSessionBtn) newSessionBtn.disabled = true;
-    createNewSessionQueue = Promise.resolve()
-        .then(function () { return createNewSessionInner(); })
-        .finally(function () {
-            createNewSessionQueue = null;
-            if (newSessionBtn) newSessionBtn.disabled = false;
-            setSendButtonState();
-        });
-    return createNewSessionQueue;
+    const leavingSessionId = currentSessionId;
+    if (!leavingSessionId) {
+        setCurrentSessionState(null);
+        localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
+        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+        const draftStream = getVisibleChatStream();
+        if (!draftStream || !draftStream.querySelector('.welcome')) setWelcome();
+        restoreInputDraft(null);
+        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);
+        updateSessionTitle();
+        syncSessionListIndicatorClasses();
+        setSendButtonState();
+        if (messageInput) messageInput.focus();
+        return null;
+    }
+
+    cancelSmoothStreamFollowForSessionSwitch();
+    saveChatScrollForSession(leavingSessionId);
+    stashInputDraft(leavingSessionId);
+    if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
+    prepareStashLeaving(leavingSessionId);
+    hideSubagentContinueBanner();
+    resetSubagentPanelForSession();
+    clearOptionalPanelsForSessionLoad();
+    clearTocForSessionLoad();
+    switchSessionEpoch += 1;
+    messageLoadEpoch += 1;
+    setCurrentSessionState(null);
+    localStorage.setItem('lastSessionId', NEW_SESSION_DRAFT_KEY);
+    if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
+    setWelcome();
+    restoreInputDraft(null);
+    if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(null);
+    if (typeof renderFollowupQueue === 'function') renderFollowupQueue(null);
+    if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(null);
+    updateSessionTitle();
+    syncSessionListIndicatorClasses();
+    replayingMessages = false;
+    hideLoading();
+    setSendButtonState();
+    document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
+        detail: { sessionId: null, phase: 'draft' },
+    }));
+    if (messageInput) messageInput.focus();
+    return null;
 }
 
-async function createNewSessionInner() {
-    const leavingSessionId = currentSessionId;
+async function materializeNewSession() {
+    if (currentSessionId) return currentSessionId;
+    if (materializeNewSessionQueue) return materializeNewSessionQueue;
+    materializeNewSessionQueue = Promise.resolve()
+        .then(function () { return materializeNewSessionInner(); })
+        .finally(function () {
+            materializeNewSessionQueue = null;
+        });
+    return materializeNewSessionQueue;
+}
+
+async function materializeNewSessionInner() {
+    const draftEpoch = switchSessionEpoch;
     const createStartedAt = performance.now();
     try {
-        cancelSmoothStreamFollowForSessionSwitch();
-        saveChatScrollForSession(leavingSessionId);
-        stashInputDraft(leavingSessionId);
-        if (typeof stashSkillPickerDraft === 'function') stashSkillPickerDraft(leavingSessionId);
-        prepareStashLeaving(leavingSessionId);
-
-        // Make the interaction feel immediate. The old stream has already been
-        // stashed, so show a clean composer while durable creation continues.
-        resetSubagentPanelForSession();
-        switchSessionEpoch += 1;
-        messageLoadEpoch += 1;
-        setCurrentSessionState(null);
-        if (!getVisibleChatStream()) ensureVisibleChatStreamSlot();
-        setWelcome();
-        replayingMessages = false;
-        setSendButtonState();
-
         const response = await fetch('/sessions', { method: 'POST' });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
-        if (data && data.session) sessionStore.upsert(data.session);
-        setCurrentSessionState(data.session_id);
-        if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(currentSessionId);
-        localStorage.setItem('lastSessionId', currentSessionId);
-        restoreInputDraft(currentSessionId);
-        if (typeof restoreSkillPickerDraft === 'function') restoreSkillPickerDraft(currentSessionId);
-        if (typeof renderFollowupQueue === 'function') renderFollowupQueue(currentSessionId);
-        if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(currentSessionId);
-        if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(currentSessionId);
-        if (data && data.session) {
-            syncArchivedSessionStateFromStore();
-            renderSessionListIfChanged(false);
-            void refreshSingleSessionRow(data.session_id);
-        } else {
-            await loadSessions();
+        const sessionId = String(data.session_id);
+        const session = data.session || { id: sessionId, name: '新会话' };
+        sessionStore.protectFromSnapshots(session);
+
+        const ownsDraft = !currentSessionId && switchSessionEpoch === draftEpoch;
+        const draftText = ownsDraft && messageInput
+            ? messageInput.value
+            : readStoredInputDraft(null);
+        persistInputDraft(sessionId, draftText);
+        removeStoredInputDraft(null);
+
+        if (ownsDraft) {
+            setCurrentSessionState(sessionId);
+            if (typeof updateHumanInteractionBanner === 'function') updateHumanInteractionBanner(sessionId);
+            localStorage.setItem('lastSessionId', sessionId);
+            // Do not restore the composer here: it is already the live source
+            // of truth and restoring an older value causes the visible blink.
+            if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
+            if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
+            if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
         }
+        syncArchivedSessionStateFromStore();
+        renderSessionListIfChanged(false);
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
-            detail: { sessionId: currentSessionId, phase: 'created' },
+            detail: { sessionId: sessionId, phase: 'created' },
         }));
-        setSendButtonState();
-        maybeStartStreamPollForSession(currentSessionId);
-        scheduleContextTokensAfterPaint(currentSessionId);
         if (typeof uiPerformance !== 'undefined') {
-            uiPerformance.sample(currentSessionId, 'session.create', performance.now() - createStartedAt);
+            uiPerformance.sample(sessionId, 'session.create', performance.now() - createStartedAt);
         }
-        return currentSessionId;
+        return sessionId;
     } catch (error) {
         console.error('创建新会话失败', error);
-        appendLogVisible('创建新会话失败', 'error-log');
-        if (leavingSessionId && typeof switchSession === 'function') {
-            await switchSession(leavingSessionId);
+        if (!currentSessionId && switchSessionEpoch === draftEpoch) {
+            appendLogVisible('创建新会话失败，请重试发送', 'error-log');
         }
         return null;
     }

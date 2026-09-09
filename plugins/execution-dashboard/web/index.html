@@ -1,1 +1,37 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Execution Dashboard</title><link rel="stylesheet" href="style.css"></head><body><main><header><h1>Execution Dashboard</h1><button id="refresh">Refresh</button></header><p id="summary">Loading…</p><section id="sessions"></section></main><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>执行状态看板</title>
+  <link rel="icon" type="image/png" href="/assets/sugar-logo.png">
+  <link rel="apple-touch-icon" href="/assets/sugar-logo.png">
+  <link rel="stylesheet" href="/plugin-assets/execution-dashboard/style.css?v=4">
+</head>
+<body>
+  <header class="dash-topbar">
+    <div><h1>执行状态看板</h1><p>跨会话 · 每次 LLM 请求 · 实时刷新</p></div>
+    <div class="dash-controls">
+      <select id="session-filter" aria-label="选择会话"><option value="">全部会话</option></select>
+      <button id="refresh-btn" type="button">立即刷新</button>
+      <button id="back-to-chat-btn" class="back-to-chat" type="button">返回聊天</button>
+    </div>
+  </header>
+  <main>
+    <section class="dash-summary" id="summary"></section>
+    <section class="dash-chart-grid">
+      <article class="dash-panel"><header><h2>LLM API 指标</h2><span>输入、输出及上下文长度</span></header><div id="api-chart" class="chart"></div></article>
+      <article class="dash-panel"><header><h2>阶段耗时</h2><select id="phase-chart-mode" aria-label="阶段图显示方式"><option value="round">按轮次</option><option value="run">按 Run 合并</option></select></header><div id="phase-chart" class="chart"></div></article>
+      <article class="dash-panel"><header><h2>工具累计统计</h2><select id="tool-chart-mode" aria-label="工具统计方式"><option value="count">调用次数</option><option value="duration">累计耗时（可重叠）</option></select></header><div id="tool-chart" class="chart"></div></article>
+      <article class="dash-panel"><header><h2>网络请求</h2><span>左轴：耗时 · 右轴：流量</span></header><div id="network-chart" class="chart"></div></article>
+    </section>
+    <section class="detail-toolbar">
+      <div><h2>LLM 详细信息</h2><span>默认显示累计总值</span></div>
+      <label>历史轮次<select id="request-filter" aria-label="选择历史 LLM 轮次"></select></label>
+    </section>
+    <section id="dashboard-body"></section>
+  </main>
+  <div id="chart-tooltip" class="chart-tooltip" role="tooltip" aria-hidden="true"></div>
+  <script src="/plugin-assets/execution-dashboard/app.js?v=4"></script>
+</body>
+</html>
