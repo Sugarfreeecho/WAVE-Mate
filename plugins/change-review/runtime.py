@@ -1,4 +1,4 @@
-"""Hot-path callbacks that connect native file tools to the plugin store."""
+"""Hot-path callbacks that connect tool execution to the plugin store."""
 
 from __future__ import annotations
 
@@ -33,8 +33,17 @@ def initialize(host_module):
     store_module = _store_module()
     session_manager = host_module.session_manager
 
-    def before_native_file_tool(state, tool_name, tool_args, tool_call_id, worktree_root=""):
-        if tool_name not in {"write_file", "edit_file", "apply_patch", "delete_file"}:
+    def before_native_file_tool(
+        state,
+        tool_name,
+        tool_args,
+        tool_call_id,
+        worktree_root="",
+        observe_workspace=False,
+    ):
+        if tool_name not in {
+            "write_file", "edit_file", "apply_patch", "delete_file", "run_shell"
+        } and not observe_workspace:
             return None
         session_id = str((state or {}).get("session_id") or "")
         if not session_id:
@@ -60,6 +69,16 @@ def initialize(host_module):
             return []
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
         return store.finish_capture(capture, successful=bool(successful))
+
+    def after_run(state):
+        session_id = str((state or {}).get("session_id") or "")
+        run_id = str((state or {}).get("_runtime_v2_run_id") or "")
+        if not session_id or not run_id:
+            return None
+        store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
+        if store.index_path.is_file():
+            store.finish_run(run_id)
+        return None
 
     def referenced_snapshot_ids(session_id):
         ids = set()
@@ -95,6 +114,7 @@ def initialize(host_module):
     return {
         "before_native_file_tool": before_native_file_tool,
         "after_native_file_tool": after_native_file_tool,
+        "after_run": after_run,
         "history_truncated": history_truncated,
         "session_branched": session_branched,
     }

@@ -12,9 +12,11 @@ import gzip
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -212,6 +214,7 @@ class FileChangeReviewStore:
             "active": {},
             "groups": {},
             "operations": {},
+            "baselines": {},
         }
 
     def _load(self) -> dict:
@@ -223,7 +226,7 @@ class FileChangeReviewStore:
             raise SnapshotGoneError("change review metadata is unreadable") from exc
         if not isinstance(data, dict) or int(data.get("version") or 0) != STORE_VERSION:
             raise SnapshotGoneError("change review metadata has an unsupported version")
-        for key in ("pending", "records", "active", "groups", "operations"):
+        for key in ("pending", "records", "active", "groups", "operations", "baselines"):
             data.setdefault(key, {})
         return data
 
@@ -266,13 +269,16 @@ class FileChangeReviewStore:
     @staticmethod
     def _display_path(path: Path, work_root: Path) -> str:
         try:
-            return path.resolve().relative_to(work_root.resolve()).as_posix()
-        except ValueError:
-            return str(path.resolve())
+            relative = os.path.relpath(os.path.abspath(path), os.path.abspath(work_root))
+            if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+                return os.path.abspath(path)
+            return Path(relative).as_posix()
+        except (OSError, ValueError):
+            return os.path.abspath(path)
 
     @staticmethod
     def _key(path: Path) -> str:
-        return os.path.normcase(os.path.normpath(str(path.resolve())))
+        return os.path.normcase(os.path.normpath(os.path.abspath(path)))
 
     @staticmethod
     def _operation(before: dict, after: dict) -> str:
@@ -317,6 +323,177 @@ class FileChangeReviewStore:
         requested = "delete" if name == "delete_file" else ("create" if name == "write_file" else "modify")
         return [{"path": path.resolve(), "requested_operation": requested}], None
 
+    @staticmethod
+    def _git_inventory(work_root: Path) -> Optional[List[Path]]:
+        """Return Git's review surface: tracked plus non-ignored untracked files.
+
+        This deliberately follows repository policy instead of maintaining a
+        list of tool-specific scratch directories.  Missing tracked paths stay
+        in the inventory so deletions can be observed.
+        """
+        try:
+            root_result = subprocess.run(
+                ["git", "-C", str(work_root), "rev-parse", "--show-toplevel"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            repo_root = Path(
+                root_result.stdout.decode("utf-8", errors="surrogateescape").strip()
+            ).resolve()
+            relative_root = work_root.resolve().relative_to(repo_root)
+            pathspec = relative_root.as_posix() if relative_root.parts else "."
+            files_result = subprocess.run(
+                [
+                    "git", "-C", str(repo_root), "ls-files", "--full-name",
+                    "-co", "--exclude-standard", "-z", "--", pathspec,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+
+        paths: List[Path] = []
+        seen: set[str] = set()
+        for raw in files_result.stdout.split(b"\0"):
+            if not raw:
+                continue
+            relative = raw.decode("utf-8", errors="surrogateescape")
+            path = repo_root / relative
+            try:
+                path.relative_to(work_root)
+            except ValueError:
+                continue
+            key = FileChangeReviewStore._key(path)
+            if key not in seen:
+                seen.add(key)
+                paths.append(path)
+        return paths
+
+    def _baseline_archive_path(self, baseline_id: str) -> Path:
+        return self.root / "baselines" / f"{baseline_id}.zip"
+
+    def _remove_baseline(self, baseline: dict) -> None:
+        baseline_id = str(baseline.get("baseline_id") or "")
+        if not baseline_id:
+            return
+        try:
+            self._baseline_archive_path(baseline_id).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    def _ensure_workspace_baseline(
+        self,
+        index: dict,
+        *,
+        run_id: str,
+        work_root: Path,
+    ) -> Optional[dict]:
+        baseline_key = str(run_id or "") + "\0" + self._key(work_root)
+        existing = index["baselines"].get(baseline_key)
+        if isinstance(existing, dict):
+            return existing
+
+        inventory = self._git_inventory(work_root)
+        if inventory is None:
+            return None
+
+        # A session executes one top-level run at a time.  Once a new run gets
+        # its baseline, older full-workspace archives are no longer needed;
+        # changed files have already been promoted into durable content blobs.
+        for key, baseline in list(index["baselines"].items()):
+            if key != baseline_key and isinstance(baseline, dict):
+                self._remove_baseline(baseline)
+                index["baselines"].pop(key, None)
+
+        baseline_id = uuid.uuid4().hex
+        target = self._baseline_archive_path(baseline_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=baseline_id + ".", suffix=".tmp", dir=str(target.parent)
+        )
+        os.close(fd)
+        entries: Dict[str, dict] = {}
+        try:
+            with zipfile.ZipFile(
+                tmp_name, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1
+            ) as archive:
+                for ordinal, path in enumerate(inventory):
+                    data = _read_regular_file(path)
+                    state = _state(path, data)
+                    path_key = self._key(path)
+                    archive_name = None
+                    if data is not None:
+                        archive_name = f"{ordinal:08d}"
+                        archive.writestr(archive_name, data)
+                    entries[path_key] = {
+                        "path_abs": str(path),
+                        "path": self._display_path(path, work_root),
+                        "path_key": path_key,
+                        "before": state,
+                        "archive_name": archive_name,
+                    }
+            os.replace(tmp_name, target)
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
+
+        baseline = {
+            "baseline_id": baseline_id,
+            "baseline_key": baseline_key,
+            "run_id": str(run_id or ""),
+            "work_root": str(work_root),
+            "entries": entries,
+        }
+        index["baselines"][baseline_key] = baseline
+        return baseline
+
+    def _baseline_bytes(self, baseline: dict, entry: dict) -> Optional[bytes]:
+        state = entry.get("before") or {}
+        if not state.get("exists") or state.get("kind") != "file":
+            return None
+        archive_name = str(entry.get("archive_name") or "")
+        if not archive_name:
+            raise SnapshotGoneError("workspace baseline content is missing")
+        try:
+            with zipfile.ZipFile(
+                self._baseline_archive_path(str(baseline.get("baseline_id") or "")), "r"
+            ) as archive:
+                data = archive.read(archive_name)
+        except Exception as exc:
+            raise SnapshotGoneError("workspace baseline is missing or damaged") from exc
+        if _sha256(data) != str(state.get("sha256") or ""):
+            raise SnapshotGoneError("workspace baseline checksum mismatch")
+        return data
+
+    def _workspace_entries(self, work_root: Path) -> Optional[tuple[Dict[str, dict], Dict[str, bytes]]]:
+        inventory = self._git_inventory(work_root)
+        if inventory is None:
+            return None
+        entries: Dict[str, dict] = {}
+        contents: Dict[str, bytes] = {}
+        for path in inventory:
+            path_key = self._key(path)
+            data = _read_regular_file(path)
+            state = _state(path, data)
+            entries[path_key] = {
+                "path_abs": str(path),
+                "path": self._display_path(path, work_root),
+                "path_key": path_key,
+                "before": state,
+            }
+            if data is not None:
+                contents[path_key] = data
+        return entries, contents
+
     def begin_capture(
         self,
         tool_name: str,
@@ -326,26 +503,32 @@ class FileChangeReviewStore:
         tool_call_id: str,
         work_root: str | Path,
     ) -> Optional[Capture]:
-        """Persist pre-tool bytes. Call while holding the workspace write lock."""
-        if tool_name not in {"write_file", "edit_file", "apply_patch", "delete_file"}:
-            return None
-        # Temporary files are turn-scoped implementation details and are deleted
-        # outside the tool call, so exposing them would immediately create a stale
-        # undo target.
-        if tool_name == "write_file" and bool((args or {}).get("temporary")):
-            return None
-        try:
-            specs, manifest = self._target_specs(tool_name, args)
-        except Exception:
-            # Invalid arguments will be reported by the actual tool unchanged.
-            return None
-        if not specs and not manifest:
-            return None
+        """Persist declared paths and the execution process workspace baseline."""
+        supported_file_tool = tool_name in {
+            "write_file", "edit_file", "apply_patch", "delete_file"
+        }
+        specs: List[dict] = []
+        manifest: Optional[dict] = None
+        if supported_file_tool and not (
+            tool_name == "write_file" and bool((args or {}).get("temporary"))
+        ):
+            try:
+                specs, manifest = self._target_specs(tool_name, args)
+            except Exception:
+                # Invalid arguments will be reported by the actual tool unchanged.
+                specs, manifest = [], None
         capture_id = uuid.uuid4().hex
         root = Path(work_root).resolve()
         entries: List[dict] = []
         with self.lock:
             index = self._load()
+            baseline = self._ensure_workspace_baseline(
+                index,
+                run_id=str(run_id or ""),
+                work_root=root,
+            )
+            if baseline is None and not specs and not manifest:
+                return None
             group_id = uuid.uuid4().hex if manifest is not None else None
             for spec in specs:
                 path = Path(spec["path"]).resolve()
@@ -375,6 +558,8 @@ class FileChangeReviewStore:
                 "tool_call_id": str(tool_call_id or ""),
                 "entries": entries,
                 "group_id": group_id,
+                "baseline_key": baseline.get("baseline_key") if baseline else None,
+                "work_root": str(root),
             }
             self._save(index)
         return Capture(capture_id)
@@ -409,13 +594,103 @@ class FileChangeReviewStore:
         )
         return {"diff": unified, "added": added, "removed": removed, "diff_omitted_reason": None}
 
-    def finish_capture(self, capture: Optional[Capture], *, successful: bool = True) -> List[dict]:
-        """Promote changed paths and return cumulative UI records.
+    def _promote_entry(
+        self,
+        index: dict,
+        pending: dict,
+        entry: dict,
+        after_data: Optional[bytes],
+        immediate_after: dict,
+        *,
+        authoritative_baseline: bool = False,
+    ) -> Optional[dict]:
+        run_id = str(pending.get("run_id") or "")
+        active_key = run_id + "\0" + str(entry["path_key"])
+        snapshot_id = index["active"].get(active_key)
+        record = index["records"].get(snapshot_id) if snapshot_id else None
+        entry_before_data = (
+            self._get_blob(entry.get("before_blob"))
+            if (entry.get("before") or {}).get("exists")
+            and (entry.get("before") or {}).get("kind") == "file"
+            else None
+        )
+        if not isinstance(record, dict) or record.get("reverted"):
+            if _review_same(entry["before"], entry_before_data, immediate_after, after_data):
+                return None
+            snapshot_id = uuid.uuid4().hex
+            record = {
+                "snapshot_id": snapshot_id,
+                "run_id": run_id,
+                "tool_call_id": str(pending.get("tool_call_id") or ""),
+                "path": entry["path"],
+                "path_abs": entry["path_abs"],
+                "path_key": entry["path_key"],
+                "before": entry["before"],
+                "before_blob": entry.get("before_blob"),
+                "revision": 0,
+                "reverted": False,
+                "group_id": entry.get("group_id"),
+            }
+            index["records"][snapshot_id] = record
+            index["active"][active_key] = snapshot_id
+            group_id = entry.get("group_id")
+            if group_id and group_id in index["groups"]:
+                index["groups"][group_id]["snapshot_ids"].append(snapshot_id)
+        elif authoritative_baseline:
+            # A declared file-tool snapshot may have been taken after an MCP,
+            # plugin or shell tool changed the path.  The process baseline is
+            # earlier and therefore owns the cumulative diff/undo origin.
+            baseline_changed = not _same_state(record.get("before") or {}, entry["before"])
+            if not baseline_changed and record.get("before_blob") and entry.get("before_blob"):
+                baseline_changed = record.get("before_blob") != entry.get("before_blob")
+            if baseline_changed:
+                record["before"] = entry["before"]
+                record["before_blob"] = entry.get("before_blob")
+                record["path"] = entry["path"]
+                record["path_abs"] = entry["path_abs"]
 
-        A native tool exception is not a completed file change.  Drop its
-        pending pre-tool capture without exposing a review row, even if the
-        implementation happened to leave a partial write behind.
-        """
+        previous_after = dict(record.get("after") or {})
+        previous_before = dict(record.get("before") or {})
+        record_before_data: Optional[bytes] = None
+        if str((record.get("before") or {}).get("kind") or "") != "directory":
+            record_before_data = (
+                self._get_blob(record.get("before_blob"))
+                if (record.get("before") or {}).get("exists") else b""
+            )
+        effective = not _review_same(
+            record["before"], record_before_data, immediate_after, after_data
+        )
+        if (
+            previous_after
+            and _same_state(previous_after, immediate_after)
+            and previous_before == record.get("before")
+            and bool(record.get("effective", True)) == effective
+        ):
+            return None
+
+        record["after"] = immediate_after
+        record["after_blob"] = self._put_blob(after_data) if after_data is not None else None
+        record["operation"] = self._operation(record["before"], immediate_after)
+        record["revision"] = int(record.get("revision") or 0) + 1
+        if str((record.get("before") or {}).get("kind") or "") == "directory":
+            record.update({
+                "diff": None,
+                "added": 0,
+                "removed": 0,
+                "diff_omitted_reason": "directory",
+            })
+        else:
+            record.update(self._diff(record["path"], record_before_data or b"", after_data or b""))
+        record["effective"] = effective
+        if not effective:
+            record["neutralized"] = True
+            index["active"].pop(active_key, None)
+        else:
+            record.pop("neutralized", None)
+        return self.public_record(record)
+
+    def finish_capture(self, capture: Optional[Capture], *, successful: bool = True) -> List[dict]:
+        """Promote the execution process's cumulative, byte-accurate changes."""
         if capture is None:
             return []
         with self.lock:
@@ -423,75 +698,119 @@ class FileChangeReviewStore:
             pending = index["pending"].pop(capture.capture_id, None)
             if not isinstance(pending, dict):
                 return []
-            if not successful:
-                self._save(index)
-                self._gc_blobs(index)
-                return []
             output: List[dict] = []
-            run_id = str(pending.get("run_id") or "")
+            # Declared paths preserve support for non-Git workspaces, ignored
+            # files explicitly edited by native tools, and empty directories.
             for entry in pending.get("entries") or []:
                 path = Path(entry["path_abs"])
-                entry_before_data = (
-                    self._get_blob(entry.get("before_blob"))
-                    if (entry.get("before") or {}).get("exists")
-                    and (entry.get("before") or {}).get("kind") == "file"
-                    else None
-                )
                 after_data = _read_regular_file(path)
                 immediate_after = _state(path, after_data)
-                if _review_same(entry["before"], entry_before_data, immediate_after, after_data):
-                    continue
-                active_key = run_id + "\0" + str(entry["path_key"])
-                snapshot_id = index["active"].get(active_key)
-                record = index["records"].get(snapshot_id) if snapshot_id else None
-                if not isinstance(record, dict) or record.get("reverted"):
-                    snapshot_id = uuid.uuid4().hex
-                    record = {
-                        "snapshot_id": snapshot_id,
-                        "run_id": run_id,
-                        "tool_call_id": str(pending.get("tool_call_id") or ""),
-                        "path": entry["path"],
-                        "path_abs": entry["path_abs"],
-                        "path_key": entry["path_key"],
-                        "before": entry["before"],
-                        "before_blob": entry.get("before_blob"),
-                        "revision": 0,
-                        "reverted": False,
-                        "group_id": entry.get("group_id"),
-                    }
-                    index["records"][snapshot_id] = record
-                    index["active"][active_key] = snapshot_id
-                    group_id = entry.get("group_id")
-                    if group_id and group_id in index["groups"]:
-                        index["groups"][group_id]["snapshot_ids"].append(snapshot_id)
-                record["after"] = immediate_after
-                record["after_blob"] = self._put_blob(after_data) if after_data is not None else None
-                record["operation"] = self._operation(record["before"], immediate_after)
-                record["revision"] = int(record.get("revision") or 0) + 1
-                record_before_data = None
-                if str((record.get("before") or {}).get("kind") or "") == "directory":
-                    record.update({"diff": None, "added": 0, "removed": 0, "diff_omitted_reason": "directory"})
-                else:
-                    record_before_data = (
-                        self._get_blob(record.get("before_blob"))
-                        if record["before"].get("exists") else b""
+                public = self._promote_entry(index, pending, entry, after_data, immediate_after)
+                if public is not None:
+                    output.append(public)
+
+            baseline = index["baselines"].get(str(pending.get("baseline_key") or ""))
+            work_root = Path(pending.get("work_root") or ".").resolve()
+            current = (
+                self._workspace_entries(work_root)
+                if isinstance(baseline, dict) else None
+            )
+            if isinstance(baseline, dict) and current is not None:
+                current_entries, current_contents = current
+                baseline_entries = baseline.get("entries") or {}
+                run_prefix = str(pending.get("run_id") or "") + "\0"
+                active_entries: Dict[str, dict] = {}
+                for active_key, snapshot_id in index["active"].items():
+                    if not str(active_key).startswith(run_prefix):
+                        continue
+                    record = index["records"].get(snapshot_id)
+                    if isinstance(record, dict):
+                        active_entries[str(record.get("path_key") or "")] = record
+                for path_key in sorted(
+                    set(baseline_entries) | set(current_entries) | set(active_entries)
+                ):
+                    base_entry = baseline_entries.get(path_key)
+                    current_entry = current_entries.get(path_key)
+                    if base_entry is None and current_entry is not None:
+                        base_entry = {
+                            "path_abs": current_entry["path_abs"],
+                            "path": current_entry["path"],
+                            "path_key": path_key,
+                            "before": {
+                                "exists": False, "kind": "missing", "sha256": None,
+                                "bytes": 0, "lines": 0,
+                            },
+                            "archive_name": None,
+                        }
+                    elif base_entry is None and path_key in active_entries:
+                        active_record = active_entries[path_key]
+                        base_entry = {
+                            "path_abs": active_record["path_abs"],
+                            "path": active_record["path"],
+                            "path_key": path_key,
+                            "before": {
+                                "exists": False, "kind": "missing", "sha256": None,
+                                "bytes": 0, "lines": 0,
+                            },
+                            "archive_name": None,
+                        }
+                    if base_entry is None:
+                        continue
+                    if current_entry is not None:
+                        after_data = current_contents.get(path_key)
+                        immediate_after = current_entry["before"]
+                    else:
+                        # The tool may have changed .gitignore during the run.
+                        # A baseline path disappearing from `git ls-files -co`
+                        # is not necessarily a filesystem deletion.
+                        current_path = Path(base_entry["path_abs"])
+                        after_data = _read_regular_file(current_path)
+                        immediate_after = _state(current_path, after_data)
+                    active_key = str(pending.get("run_id") or "") + "\0" + path_key
+                    if (
+                        _same_state(base_entry.get("before") or {}, immediate_after)
+                        and active_key not in index["active"]
+                    ):
+                        continue
+                    active_record = index["records"].get(index["active"].get(active_key))
+                    if (
+                        isinstance(active_record, dict)
+                        and _same_state(active_record.get("before") or {}, base_entry.get("before") or {})
+                        and _same_state(active_record.get("after") or {}, immediate_after)
+                        and bool(active_record.get("effective", True))
+                    ):
+                        continue
+                    workspace_entry = dict(base_entry)
+                    baseline_data = self._baseline_bytes(baseline, base_entry)
+                    workspace_entry["before_blob"] = (
+                        self._put_blob(baseline_data) if baseline_data is not None else None
                     )
-                    cumulative_after = after_data or b""
-                    record.update(self._diff(record["path"], record_before_data, cumulative_after))
-                record["effective"] = not _review_same(
-                    record["before"], record_before_data, immediate_after, after_data
-                )
-                # A later edit in the same execution process may bring the file
-                # back to its original bytes. Keep a revision tombstone so the
-                # just-emitted UI metadata can hide the earlier row, but no
-                # longer expose an undo capability for a net-zero change.
-                if not record["effective"]:
-                    record["neutralized"] = True
-                    index["active"].pop(active_key, None)
-                output.append(self.public_record(record))
+                    if after_data is None and immediate_after.get("exists"):
+                        after_data = _read_regular_file(Path(base_entry["path_abs"]))
+                    public = self._promote_entry(
+                        index,
+                        pending,
+                        workspace_entry,
+                        after_data,
+                        immediate_after,
+                        authoritative_baseline=True,
+                    )
+                    if public is not None:
+                        output.append(public)
+
+            # Only the latest revision for each path matters inside one tool
+            # result.  This also prevents the declared-path fallback from
+            # briefly flashing a misleading intermediate row.
+            latest: Dict[str, dict] = {}
+            order: List[str] = []
+            for row in output:
+                key = str(row.get("snapshot_id") or row.get("path") or "")
+                if key not in latest:
+                    order.append(key)
+                latest[key] = row
             self._save(index)
             self._gc_blobs(index)
-            return output
+            return [latest[key] for key in order]
 
     @staticmethod
     def public_record(record: dict) -> dict:
@@ -658,6 +977,23 @@ class FileChangeReviewStore:
             }
             self._save(index)
             self._gc_blobs(index)
+
+    def finish_run(self, run_id: str) -> None:
+        """Discard the full workspace checkpoint after records are durable."""
+        wanted = str(run_id or "")
+        if not wanted:
+            return
+        with self.lock:
+            index = self._load()
+            changed = False
+            for key, baseline in list(index["baselines"].items()):
+                if isinstance(baseline, dict) and str(baseline.get("run_id") or "") == wanted:
+                    self._remove_baseline(baseline)
+                    index["baselines"].pop(key, None)
+                    changed = True
+            if changed:
+                self._save(index)
+                self._gc_blobs(index)
 
     def copy_referenced_to(
         self,

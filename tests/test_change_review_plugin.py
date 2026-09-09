@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +57,12 @@ def capture(store, workspace, tool, args, mutate, run="run-1", call="call-1"):
     return store.finish_capture(started)
 
 
+def init_git_workspace(path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "review@test.invalid"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "Review Test"], check=True)
+
+
 def test_create_modify_delete_and_undo(review):
     store, workspace = review
     path = workspace / "hello.txt"
@@ -104,6 +112,38 @@ def test_runtime_callback_captures_real_write_file_invocation(tmp_path):
     assert result.startswith("Successfully wrote file")
     assert len(changes) == 1
     assert changes[0]["path"] == "created.txt"
+
+
+def test_runtime_callback_can_observe_an_unknown_external_tool(tmp_path):
+    sys.path.insert(0, str(ROOT / "app"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    session_dir = tmp_path / "session"
+
+    class Manager:
+        def _get_session_path(self, _session_id):
+            return session_dir
+
+    runtime = _load_plugin_module("runtime.py", "test_change_review_external_runtime")
+    callbacks = runtime.initialize(SimpleNamespace(session_manager=Manager()))
+    state = {"session_id": "external-session", "_runtime_v2_run_id": "external-run"}
+    capture_state = callbacks["before_native_file_tool"](
+        state, "third_party_writer", {}, "external-call", str(workspace), True
+    )
+    (workspace / "external.txt").write_text("created externally\n", encoding="utf-8")
+    changes = callbacks["after_native_file_tool"](state, capture_state, True)
+
+    assert len(changes) == 1
+    assert changes[0]["path"] == "external.txt"
+    assert changes[0]["operation"] == "create"
+    callbacks["after_run"](state)
+    stored = json.loads((session_dir / "change_reviews/index.json").read_text(encoding="utf-8"))
+    assert stored["baselines"] == {}
+    assert not list((session_dir / "change_reviews/baselines").glob("*.zip"))
+    store = _load_store().FileChangeReviewStore(session_dir)
+    store.undo([changes[0]["snapshot_id"]], "undo-after-baseline-cleanup")
+    assert not (workspace / "external.txt").exists()
 
 
 def test_real_apply_patch_keeps_line_endings_and_reports_hunk_diff(review):
@@ -195,7 +235,7 @@ def test_same_round_same_file_is_cumulative(review):
     assert path.read_text(encoding="utf-8") == "a\nb\n"
 
 
-def test_noop_and_failed_tool_have_no_effective_change(review):
+def test_noop_has_no_change_but_failed_tool_reports_actual_partial_write(review):
     store, workspace = review
     path = workspace / "unchanged.txt"
     path.write_text("same", encoding="utf-8")
@@ -207,8 +247,10 @@ def test_noop_and_failed_tool_have_no_effective_change(review):
         tool_call_id="failed-call", work_root=workspace,
     )
     path.write_text("partially-written", encoding="utf-8")
-    assert store.finish_capture(started, successful=False) == []
-    assert not json.loads(store.index_path.read_text(encoding="utf-8"))["records"]
+    partial = store.finish_capture(started, successful=False)
+    assert len(partial) == 1
+    assert partial[0]["operation"] == "modify"
+    assert (partial[0]["added"], partial[0]["removed"]) == (1, 1)
 
 
 def test_same_round_return_to_baseline_is_not_undoable(review):
@@ -227,6 +269,106 @@ def test_same_round_return_to_baseline_is_not_undoable(review):
     assert second["effective"] is False
     with pytest.raises(module.SnapshotGoneError):
         store.undo([first["snapshot_id"]], "undo-neutralized")
+
+
+def test_git_process_baseline_tracks_non_native_changes_and_net_zero_cleanup(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    tracked = workspace / "tracked.txt"
+    tracked.write_text("one\ntwo\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+    store = module.FileChangeReviewStore(tmp_path / "session")
+
+    scratch = workspace / ".playwright-mcp" / "page.yml"
+    first = capture(
+        store,
+        workspace,
+        "mcp_browser_snapshot",
+        {},
+        lambda: (scratch.parent.mkdir(), scratch.write_text("temporary\n", encoding="utf-8")),
+        run="process-1",
+        call="mcp-1",
+    )
+    assert len(first) == 1
+    assert first[0]["path"] == ".playwright-mcp/page.yml"
+    assert first[0]["operation"] == "create"
+    assert (first[0]["added"], first[0]["removed"]) == (1, 0)
+
+    cleaned = capture(
+        store,
+        workspace,
+        "delete_file",
+        {"path": str(scratch.parent)},
+        lambda: shutil.rmtree(scratch.parent),
+        run="process-1",
+        call="native-delete",
+    )
+    row = next(item for item in cleaned if item["snapshot_id"] == first[0]["snapshot_id"])
+    assert row["effective"] is False
+    with pytest.raises(module.SnapshotGoneError):
+        store.undo([first[0]["snapshot_id"]], "undo-net-zero")
+
+
+def test_git_process_baseline_reports_true_insertions_and_deletions(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    path = workspace / "tracked.txt"
+    path.write_text("one\ntwo\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+    store = module.FileChangeReviewStore(tmp_path / "session")
+
+    inserted = capture(
+        store,
+        workspace,
+        "run_shell",
+        {"command": "append"},
+        lambda: path.write_text("one\ntwo\nthree\n", encoding="utf-8"),
+        run="insert-run",
+    )
+    assert len(inserted) == 1
+    assert (inserted[0]["added"], inserted[0]["removed"]) == (1, 0)
+    store.undo([inserted[0]["snapshot_id"]], "undo-insert")
+    store.commit_undo("undo-insert")
+
+    deleted = capture(
+        store,
+        workspace,
+        "mcp_delete",
+        {},
+        path.unlink,
+        run="delete-run",
+    )
+    assert len(deleted) == 1
+    assert deleted[0]["operation"] == "delete"
+    assert (deleted[0]["added"], deleted[0]["removed"]) == (0, 2)
+    store.undo([deleted[0]["snapshot_id"]], "undo-delete")
+    assert path.read_text(encoding="utf-8") == "one\ntwo\n"
+
+
+def test_gitignore_change_does_not_turn_an_existing_file_into_a_fake_delete(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    visible = workspace / "visible.txt"
+    visible.write_text("still here\n", encoding="utf-8")
+    store = module.FileChangeReviewStore(tmp_path / "session")
+
+    changes = capture(
+        store,
+        workspace,
+        "run_shell",
+        {},
+        lambda: (workspace / ".gitignore").write_text("visible.txt\n", encoding="utf-8"),
+        run="ignore-run",
+    )
+
+    assert [row["path"] for row in changes] == [".gitignore"]
+    assert visible.read_text(encoding="utf-8") == "still here\n"
 
 
 def test_binary_and_large_file_omit_line_diff(review):
@@ -383,6 +525,11 @@ def test_manifest_exposes_trusted_plugin_owned_web_and_runtime():
     plugin = next(item for item in load_plugins(force=True).plugins if item.plugin_id == "change-review")
     contribution = next(item for item in plugin_ui_contributions(plugin) if item["slot"] == "chat.extension")
     assert contribution["renderer"]["module"].startswith("/plugin-assets/change-review/change-review.js?v=")
+
+    agent_loop_source = (ROOT / "app/agent_loop.py").read_text(encoding="utf-8")
+    assert agent_loop_source.count("observe_workspace=True") == 2
+    assert "ToolInvocationKind.MCP" in agent_loop_source
+    assert "ToolInvocationKind.PLUGIN" in agent_loop_source
 
 
 def test_tool_finished_ui_changes_round_trip_without_entering_model_history(tmp_path):

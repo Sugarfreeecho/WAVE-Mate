@@ -5568,6 +5568,52 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         response["_control_result"] = dict(control_result)
                     return response
 
+                def _begin_change_review_capture(
+                    worktree_root: str = "", *, observe_workspace: bool = False
+                ):
+                    try:
+                        return _workflow_callbacks().call(
+                            "before_native_file_tool",
+                            state,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            worktree_root,
+                            observe_workspace,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "change review pre-tool snapshot failed for %s",
+                            tool_name,
+                            exc_info=True,
+                        )
+                        return None
+
+                def _finish_change_review_capture(capture, successful: bool):
+                    if capture is None:
+                        return []
+                    try:
+                        return _workflow_callbacks().call(
+                            "after_native_file_tool",
+                            state,
+                            capture,
+                            successful,
+                        ) or []
+                    except Exception:
+                        logger.warning(
+                            "change review post-tool snapshot failed for %s",
+                            tool_name,
+                            exc_info=True,
+                        )
+                        return []
+
+                def _attach_change_review(response: Dict[str, Any], changes):
+                    if changes:
+                        # UI-only metadata: model history reads the original
+                        # result fields and never consumes this plugin value.
+                        response["ui"] = {"changes": changes}
+                    return response
+
                 if tool_descriptor is not None and tool_descriptor.invoker_id:
                     started = time.perf_counter()
 
@@ -5638,12 +5684,17 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.MCP
                 ):
                     started = time.perf_counter()
+                    mcp_work_dir = str(
+                        session_meta.get("subagent_work_dir")
+                        or session_meta.get("git_worktree_path")
+                        or ""
+                    ).strip()
+                    change_review_capture = _begin_change_review_capture(
+                        mcp_work_dir, observe_workspace=True
+                    )
+                    change_review_changes = []
+                    change_review_tool_failed = False
                     try:
-                        mcp_work_dir = str(
-                            session_meta.get("subagent_work_dir")
-                            or session_meta.get("git_worktree_path")
-                            or ""
-                        ).strip()
                         result = await _await_steerable(
                             state,
                             agent_mcp.invoke_tool_by_fname(
@@ -5660,13 +5711,22 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                         outcome = ToolOutcome.completed(result)
                     except _SteerRestartRequested:
+                        change_review_tool_failed = True
                         raise
                     except Exception as e:
+                        change_review_tool_failed = True
                         message = f"MCP 调用异常：{e}"
                         outcome = ToolOutcome.failed(
                             "mcp_invocation_error", message, content=message
                         )
-                    return _response_from_outcome(outcome, started, json_output=True)
+                    finally:
+                        change_review_changes = _finish_change_review_capture(
+                            change_review_capture, not change_review_tool_failed
+                        )
+                    return _attach_change_review(
+                        _response_from_outcome(outcome, started, json_output=True),
+                        change_review_changes,
+                    )
 
                 # Native Plugin API v1 tool. The entrypoint is loaded only in
                 # a worker process; Pre/PostToolUse hooks still wrap this path.
@@ -5675,6 +5735,16 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                     and tool_descriptor.invocation_kind is ToolInvocationKind.PLUGIN
                 ):
                     started = time.perf_counter()
+                    plugin_work_dir = str(
+                        session_meta.get("subagent_work_dir")
+                        or session_meta.get("git_worktree_path")
+                        or ""
+                    ).strip()
+                    change_review_capture = _begin_change_review_capture(
+                        plugin_work_dir, observe_workspace=True
+                    )
+                    change_review_changes = []
+                    change_review_tool_failed = False
                     try:
                         from agent_extensions import invoke_plugin_tool
 
@@ -5686,11 +5756,7 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                             invoke_plugin_tool(
                                 tool_name,
                                 tool_args if isinstance(tool_args, dict) else {},
-                                work_dir=str(
-                                    session_meta.get("subagent_work_dir")
-                                    or session_meta.get("git_worktree_path")
-                                    or ""
-                                ).strip(),
+                                work_dir=plugin_work_dir,
                                 require_worktree_isolation=bool(
                                     session_meta.get("git_worktree_managed")
                                     and (
@@ -5714,13 +5780,22 @@ async def _react_node_once(state: State, emit: Optional[Callable[[Dict[str, Any]
                         )
                         outcome = ToolOutcome.completed(result)
                     except _SteerRestartRequested:
+                        change_review_tool_failed = True
                         raise
                     except Exception as e:
+                        change_review_tool_failed = True
                         message = f"Plugin tool error ({tool_name}): {e}"
                         outcome = ToolOutcome.failed(
                             "plugin_invocation_error", message, content=message
                         )
-                    return _response_from_outcome(outcome, started, json_output=True)
+                    finally:
+                        change_review_changes = _finish_change_review_capture(
+                            change_review_capture, not change_review_tool_failed
+                        )
+                    return _attach_change_review(
+                        _response_from_outcome(outcome, started, json_output=True),
+                        change_review_changes,
+                    )
 
                 tool_func = tools_dict.get(tool_name)
                 tool_failed = False
