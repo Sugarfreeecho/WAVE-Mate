@@ -246,6 +246,7 @@ function omittedText(row) {
     const why = reason === 'directory' ? t('目录结构', 'Directory structure')
         : reason === 'binary' ? t('二进制文件', 'Binary file')
         : reason === 'too_many_lines' ? t('超过 20,000 行', 'More than 20,000 lines')
+        : reason === 'too_complex' ? t('改动较复杂，已省略逐行预览；仍可撤销', 'Line preview omitted for complex changes; undo is available')
             : t('超过 1 MiB', 'Larger than 1 MiB');
     const before = row.before || {}; const after = row.after || {};
     return `${why} · ${formatBytes(before.bytes)} / ${before.lines || 0} ${t('行', 'lines')} → `

@@ -15,8 +15,13 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
+import stat
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -26,6 +31,89 @@ MAX_DIFF_BYTES = 1024 * 1024
 MAX_DIFF_LINES = 20_000
 STORE_VERSION = 1
 REVIEW_DIR_NAME = "change_reviews"
+
+
+class _ReviewOpcodes(difflib.SequenceMatcher):
+    """Reuse difflib's hunk grouping with already-computed edit operations."""
+
+    def __init__(self, opcodes):
+        self.review_opcodes = opcodes
+
+    def get_opcodes(self):
+        return self.review_opcodes
+
+
+def _bounded_line_matcher(before, after):
+    counts = Counter(after)
+    if sum(counts[line] for line in before) <= 250_000:
+        return difflib.SequenceMatcher(None, before, after, autojunk=False)
+    # Myers is fast for a small number of edits even in highly repetitive files.
+    # Bound dense rewrites rather than blocking a ReAct step on quadratic work.
+    deadline = time.perf_counter() + 0.08
+    n, m = len(before), len(after)
+    frontier = {1: 0}
+    trace = []
+    distance = None
+    for d in range(min(n + m, 128) + 1):
+        if time.perf_counter() > deadline:
+            return None
+        trace.append(frontier.copy())
+        for k in range(-d, d + 1, 2):
+            if (k + d) % 16 == 0 and time.perf_counter() > deadline:
+                return None
+            if k == -d or (k != d and frontier.get(k - 1, -1) < frontier.get(k + 1, -1)):
+                x = frontier.get(k + 1, 0)
+            else:
+                x = frontier.get(k - 1, 0) + 1
+            y = x - k
+            while x < n and y < m and before[x] == after[y]:
+                x += 1
+                y += 1
+            frontier[k] = x
+            if x >= n and y >= m:
+                distance = d
+                break
+        if distance is not None:
+            break
+    if distance is None:
+        return None
+    matches = []
+    x, y = n, m
+    for d in range(distance, -1, -1):
+        previous = trace[d]
+        k = x - y
+        if k == -d or (k != d and previous.get(k - 1, -1) < previous.get(k + 1, -1)):
+            previous_k = k + 1
+        else:
+            previous_k = k - 1
+        px = previous.get(previous_k, 0)
+        py = px - previous_k
+        while x > px and y > py:
+            matches.append((x - 1, y - 1))
+            x -= 1
+            y -= 1
+        if d:
+            if x == px:
+                y -= 1
+            else:
+                x -= 1
+    blocks = []
+    for a, b in reversed(matches):
+        if blocks and a == blocks[-1][0] + blocks[-1][2] and b == blocks[-1][1] + blocks[-1][2]:
+            blocks[-1][2] += 1
+        else:
+            blocks.append([a, b, 1])
+    blocks.append([n, m, 0])
+    opcodes = []
+    i = j = 0
+    for a, b, length in blocks:
+        if i < a or j < b:
+            tag = "replace" if i < a and j < b else ("delete" if i < a else "insert")
+            opcodes.append((tag, i, a, j, b))
+        if length:
+            opcodes.append(("equal", a, a + length, b, b + length))
+        i, j = a + length, b + length
+    return _ReviewOpcodes(opcodes)
 
 
 class ChangeReviewError(RuntimeError):
@@ -59,6 +147,58 @@ class Capture:
 
 _locks_guard = threading.Lock()
 _locks: Dict[str, threading.RLock] = {}
+# Metadata/state only, never retain a workspace's file contents in memory.
+# Access is serialized by the corresponding session store lock.
+_workspace_scans: dict[tuple[str, str], dict[str, dict]] = {}
+
+
+@lru_cache(maxsize=1)
+def _windows_file_info_api():
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicInfo(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_longlong) for name in
+                    ("creation", "access", "write", "change")] + [("attributes", wintypes.DWORD)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                      ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    query.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    return create, query, close, BasicInfo
+
+
+def _file_signature(path: Path) -> Optional[tuple]:
+    """Use identity and change time as well as mtime (which tools can restore)."""
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        change_time = info.st_ctime_ns
+        if os.name == "nt":
+            # Windows st_ctime is creation time, not the NTFS ChangeTime.
+            # Query metadata only; a failure disables cache reuse for this file.
+            import ctypes
+            create, query, close, BasicInfo = _windows_file_info_api()
+            handle = create(str(path), 0x80, 7, None, 3, 0x00200000, None)
+            if handle == ctypes.c_void_p(-1).value:
+                return None
+            try:
+                basic = BasicInfo()
+                if not query(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic)):
+                    return None
+                change_time = basic.change
+            finally:
+                close(handle)
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, change_time)
+    except OSError:
+        return None
 
 
 def _store_lock(path: Path) -> threading.RLock:
@@ -76,19 +216,9 @@ def _sha256(data: bytes) -> str:
 
 
 def _atomic_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp_name, path)
-    finally:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
+    # Encode once with the C encoder instead of thousands of tiny Python writes
+    # for the workspace manifest. Preserve the atomic replace and durability.
+    _atomic_bytes(path, json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
@@ -241,7 +371,7 @@ class FileChangeReviewStore:
             fd, tmp_name = tempfile.mkstemp(prefix=digest + ".", suffix=".tmp", dir=str(target.parent))
             try:
                 with os.fdopen(fd, "wb") as raw:
-                    with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as stream:
+                    with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0, compresslevel=1) as stream:
                         stream.write(content)
                     raw.flush()
                     os.fsync(raw.fileno())
@@ -332,22 +462,10 @@ class FileChangeReviewStore:
         in the inventory so deletions can be observed.
         """
         try:
-            root_result = subprocess.run(
-                ["git", "-C", str(work_root), "rev-parse", "--show-toplevel"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-            repo_root = Path(
-                root_result.stdout.decode("utf-8", errors="surrogateescape").strip()
-            ).resolve()
-            relative_root = work_root.resolve().relative_to(repo_root)
-            pathspec = relative_root.as_posix() if relative_root.parts else "."
             files_result = subprocess.run(
                 [
-                    "git", "-C", str(repo_root), "ls-files", "--full-name",
-                    "-co", "--exclude-standard", "-z", "--", pathspec,
+                    "git", "-C", str(work_root), "ls-files",
+                    "-co", "--exclude-standard", "-z", "--", ".",
                 ],
                 check=True,
                 stdout=subprocess.PIPE,
@@ -363,7 +481,7 @@ class FileChangeReviewStore:
             if not raw:
                 continue
             relative = raw.decode("utf-8", errors="surrogateescape")
-            path = repo_root / relative
+            path = work_root / relative
             try:
                 path.relative_to(work_root)
             except ValueError:
@@ -381,6 +499,7 @@ class FileChangeReviewStore:
         baseline_id = str(baseline.get("baseline_id") or "")
         if not baseline_id:
             return
+        _workspace_scans.pop((str(self.root), baseline_id), None)
         try:
             self._baseline_archive_path(baseline_id).unlink()
         except FileNotFoundError:
@@ -421,12 +540,25 @@ class FileChangeReviewStore:
         os.close(fd)
         entries: Dict[str, dict] = {}
         try:
-            with zipfile.ZipFile(
-                tmp_name, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1
-            ) as archive:
-                for ordinal, path in enumerate(inventory):
+            # This checkpoint is short-lived; compressing unchanged workspace
+            # bytes on the first tool was a multi-second serial cost.
+            with zipfile.ZipFile(tmp_name, "w", compression=zipfile.ZIP_STORED) as archive:
+                def read_entry(path):
+                    signature = _file_signature(path)
                     data = _read_regular_file(path)
                     state = _state(path, data)
+                    if signature != _file_signature(path):
+                        signature = None
+                    return path, data, state, signature
+
+                # Bounded batches avoid buffering the entire workspace while
+                # overlapping independent cold file opens (notably on Windows).
+                def read_entries():
+                    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="review-baseline") as pool:
+                        for start in range(0, len(inventory), 16):
+                            yield from pool.map(read_entry, inventory[start:start + 16])
+
+                for ordinal, (path, data, state, signature) in enumerate(read_entries()):
                     path_key = self._key(path)
                     archive_name = None
                     if data is not None:
@@ -437,6 +569,7 @@ class FileChangeReviewStore:
                         "path": self._display_path(path, work_root),
                         "path_key": path_key,
                         "before": state,
+                        "signature": signature,
                         "archive_name": archive_name,
                     }
             os.replace(tmp_name, target)
@@ -454,6 +587,7 @@ class FileChangeReviewStore:
             "entries": entries,
         }
         index["baselines"][baseline_key] = baseline
+        _workspace_scans[(str(self.root), baseline_id)] = entries
         return baseline
 
     def _baseline_bytes(self, baseline: dict, entry: dict) -> Optional[bytes]:
@@ -474,24 +608,35 @@ class FileChangeReviewStore:
             raise SnapshotGoneError("workspace baseline checksum mismatch")
         return data
 
-    def _workspace_entries(self, work_root: Path) -> Optional[tuple[Dict[str, dict], Dict[str, bytes]]]:
+    def _workspace_entries(self, work_root: Path, baseline: Optional[dict] = None) -> Optional[tuple[Dict[str, dict], Dict[str, bytes]]]:
         inventory = self._git_inventory(work_root)
         if inventory is None:
             return None
         entries: Dict[str, dict] = {}
         contents: Dict[str, bytes] = {}
+        cache_key = (str(self.root), str((baseline or {}).get("baseline_id") or ""))
+        previous = _workspace_scans.get(cache_key, (baseline or {}).get("entries") or {})
         for path in inventory:
             path_key = self._key(path)
+            signature = _file_signature(path)
+            cached = previous.get(path_key)
+            if signature is not None and cached and tuple(cached.get("signature") or ()) == signature:
+                entries[path_key] = cached
+                continue
             data = _read_regular_file(path)
             state = _state(path, data)
+            if signature != _file_signature(path):
+                signature = None
             entries[path_key] = {
                 "path_abs": str(path),
                 "path": self._display_path(path, work_root),
                 "path_key": path_key,
                 "before": state,
+                "signature": signature,
             }
             if data is not None:
                 contents[path_key] = data
+        _workspace_scans[cache_key] = entries
         return entries, contents
 
     def begin_capture(
@@ -576,22 +721,51 @@ class FileChangeReviewStore:
             return {"diff": None, "added": None, "removed": None, "diff_omitted_reason": reason}
         before_lines = (before_text or "").splitlines(keepends=True)
         after_lines = (after_text or "").splitlines(keepends=True)
-        matcher = difflib.SequenceMatcher(None, before_lines, after_lines, autojunk=False)
+        # Strip identical edges before matching. A one-line edit in 20,000
+        # repeated lines must not send all those lines through quadratic matching.
+        prefix = 0
+        while prefix < min(len(before_lines), len(after_lines)) and before_lines[prefix] == after_lines[prefix]:
+            prefix += 1
+        if prefix == len(before_lines) == len(after_lines):
+            return {"diff": "", "added": 0, "removed": 0, "diff_omitted_reason": None}
+        suffix = 0
+        while (suffix < min(len(before_lines), len(after_lines)) - prefix
+               and before_lines[-suffix - 1] == after_lines[-suffix - 1]):
+            suffix += 1
+        offset = max(0, prefix - 3)
+        before_lines = before_lines[offset:min(len(before_lines), len(before_lines) - suffix + 3)]
+        after_lines = after_lines[offset:min(len(after_lines), len(after_lines) - suffix + 3)]
+        matcher = _bounded_line_matcher(before_lines, after_lines)
+        if matcher is None:
+            return {"diff": None, "added": None, "removed": None, "diff_omitted_reason": "too_complex"}
         added = removed = 0
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag in {"replace", "delete"}:
                 removed += i2 - i1
             if tag in {"replace", "insert"}:
                 added += j2 - j1
-        unified = "".join(
-            difflib.unified_diff(
-                before_lines,
-                after_lines,
-                fromfile=f"a/{path}",
-                tofile=f"b/{path}",
-                lineterm="\n",
-            )
-        )
+        def line_range(start, stop):
+            length = stop - start
+            first = start + offset + 1
+            if length == 0:
+                first -= 1
+            return str(first) if length == 1 else f"{first},{length}"
+
+        # Reuse these exact opcodes for both counts and displayed hunks. The
+        # previous implementation ran a second matcher with different heuristics.
+        chunks = [f"--- a/{path}\n", f"+++ b/{path}\n"]
+        for group in matcher.get_grouped_opcodes(3):
+            first, last = group[0], group[-1]
+            chunks.append(f"@@ -{line_range(first[1], last[2])} +{line_range(first[3], last[4])} @@\n")
+            for tag, i1, i2, j1, j2 in group:
+                if tag == "equal":
+                    chunks.extend(" " + line for line in before_lines[i1:i2])
+                else:
+                    if tag in {"replace", "delete"}:
+                        chunks.extend("-" + line for line in before_lines[i1:i2])
+                    if tag in {"replace", "insert"}:
+                        chunks.extend("+" + line for line in after_lines[j1:j2])
+        unified = "".join(chunks)
         return {"diff": unified, "added": added, "removed": removed, "diff_omitted_reason": None}
 
     def _promote_entry(
@@ -712,7 +886,7 @@ class FileChangeReviewStore:
             baseline = index["baselines"].get(str(pending.get("baseline_key") or ""))
             work_root = Path(pending.get("work_root") or ".").resolve()
             current = (
-                self._workspace_entries(work_root)
+                self._workspace_entries(work_root, baseline)
                 if isinstance(baseline, dict) else None
             )
             if isinstance(baseline, dict) and current is not None:
@@ -809,7 +983,8 @@ class FileChangeReviewStore:
                     order.append(key)
                 latest[key] = row
             self._save(index)
-            self._gc_blobs(index)
+            # Superseded blobs are reclaimed at run completion/undo/prune,
+            # not by scanning the blob directory after every tool invocation.
             return [latest[key] for key in order]
 
     @staticmethod
@@ -993,7 +1168,7 @@ class FileChangeReviewStore:
                     changed = True
             if changed:
                 self._save(index)
-                self._gc_blobs(index)
+            self._gc_blobs(index)
 
     def copy_referenced_to(
         self,

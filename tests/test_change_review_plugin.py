@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -369,6 +370,111 @@ def test_gitignore_change_does_not_turn_an_existing_file_into_a_fake_delete(tmp_
 
     assert [row["path"] for row in changes] == [".gitignore"]
     assert visible.read_text(encoding="utf-8") == "still here\n"
+
+
+def test_workspace_cache_reuses_unchanged_bytes_across_store_instances(tmp_path, monkeypatch):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    for index in range(12):
+        (workspace / f"{index}.txt").write_text("before\n", encoding="utf-8")
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    capture(store, workspace, "run_shell", {}, lambda: None)
+    original = module._read_regular_file
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(module, "_read_regular_file", read)
+    # The plugin constructs a new store for each before/after callback.
+    fresh = module.FileChangeReviewStore(tmp_path / "session")
+    assert capture(fresh, workspace, "run_shell", {}, lambda: None) == []
+    assert reads == []
+    changes = capture(fresh, workspace, "run_shell", {}, lambda: (workspace / "5.txt").write_text("after\n"))
+    assert [row["path"] for row in changes] == ["5.txt"]
+    assert set(reads) == {workspace / "5.txt"}
+    fresh.undo([changes[0]["snapshot_id"]], "undo-cached")
+    assert (workspace / "5.txt").read_text() == "before\n"
+
+
+def test_workspace_cache_detects_same_size_write_with_restored_mtime(tmp_path):
+    module = _load_store()
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    init_git_workspace(workspace)
+    path = workspace / "same.txt"
+    path.write_bytes(b"before\n")
+    store = module.FileChangeReviewStore(tmp_path / "session")
+    capture(store, workspace, "run_shell", {}, lambda: None)
+    before = path.stat()
+
+    def mutate():
+        path.write_bytes(b"after!\n")
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    rows = capture(store, workspace, "run_shell", {}, mutate)
+    assert len(rows) == 1
+    store.undo([rows[0]["snapshot_id"]], "undo-restored-mtime")
+    assert path.read_bytes() == b"before\n"
+
+
+def test_git_inventory_stays_within_subdirectory(tmp_path):
+    module = _load_store()
+    init_git_workspace(tmp_path)
+    (tmp_path / "outside.txt").write_text("outside")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "inside.txt").write_text("inside")
+    assert module.FileChangeReviewStore._git_inventory(nested) == [nested / "inside.txt"]
+
+
+def test_repeated_lines_diff_is_small_and_has_original_line_numbers(tmp_path):
+    store = _load_store().FileChangeReviewStore(tmp_path / "session")
+    lines = ["same\n"] * 19000
+    changed = list(lines)
+    changed[9000] = "changed\n"
+    diff = store._diff("repeated.txt", "".join(lines).encode(), "".join(changed).encode())
+    assert (diff["added"], diff["removed"]) == (1, 1)
+    assert "@@ -8998,7 +8998,7 @@" in diff["diff"]
+    assert len(diff["diff"].splitlines()) == 11
+
+
+def test_separated_edits_in_repeated_lines_keep_exact_small_hunks(tmp_path):
+    store = _load_store().FileChangeReviewStore(tmp_path / "session")
+    lines = ["same\n"] * 19000
+    changed = list(lines)
+    changed[100] = "first\n"
+    changed[18000] = "second\n"
+    result = store._diff("repeated.txt", "".join(lines).encode(), "".join(changed).encode())
+    assert (result["added"], result["removed"]) == (2, 2)
+    assert result["diff"].count("@@ -") == 2
+    assert len(result["diff"].splitlines()) < 25
+
+
+def test_bounded_matcher_reconstructs_repeated_insert_delete_replace():
+    import random
+
+    module = _load_store()
+    rng = random.Random(73)
+    for _ in range(10):
+        before = [rng.choice(["a\n", "b\n"]) for _ in range(1100)]
+        after = list(before)
+        after[200:202] = ["replacement\n"]
+        after[800:800] = ["inserted\n"]
+        del after[400]
+        matcher = module._bounded_line_matcher(before, after)
+        assert matcher is not None
+        rebuilt = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                assert before[i1:i2] == after[j1:j2]
+                rebuilt.extend(before[i1:i2])
+            elif tag in {"replace", "insert"}:
+                rebuilt.extend(after[j1:j2])
+        assert rebuilt == after
 
 
 def test_binary_and_large_file_omit_line_diff(review):

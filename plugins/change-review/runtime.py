@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import sys
+import logging
+import time
 from pathlib import Path
 
 
@@ -55,20 +57,32 @@ def initialize(host_module):
 
             work_root = active_tool_work_dir()
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
-        return store.begin_capture(
+        started = time.perf_counter()
+        capture = store.begin_capture(
             tool_name,
             tool_args if isinstance(tool_args, dict) else {},
             run_id=str((state or {}).get("_runtime_v2_run_id") or ""),
             tool_call_id=str(tool_call_id or ""),
             work_root=work_root,
         )
+        logging.getLogger("agent_harness").info(
+            "change_review_timing session=%s tool=%s stage=before elapsed_ms=%d",
+            session_id, tool_name, (time.perf_counter() - started) * 1000,
+        )
+        return capture
 
     def after_native_file_tool(state, capture, successful=True):
         session_id = str((state or {}).get("session_id") or "")
         if not session_id or capture is None:
             return []
         store = store_module.FileChangeReviewStore(session_manager._get_session_path(session_id))
-        return store.finish_capture(capture, successful=bool(successful))
+        started = time.perf_counter()
+        changes = store.finish_capture(capture, successful=bool(successful))
+        logging.getLogger("agent_harness").info(
+            "change_review_timing session=%s stage=after elapsed_ms=%d changes=%d",
+            session_id, (time.perf_counter() - started) * 1000, len(changes),
+        )
+        return changes
 
     def after_run(state):
         session_id = str((state or {}).get("session_id") or "")
