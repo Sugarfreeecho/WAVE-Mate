@@ -395,7 +395,10 @@ def test_apply_patch_schema_explains_update_context_without_fake_before_paramete
     assert "at least one space- or minus-prefixed existing line" in patch_description
     assert "required old, before, or context content" in patch_description
     assert "Paths are resolved from the runtime WORK_DIR" in patch_description
-    assert "Files outside WORK_DIR cannot be patched" in patch_description
+    # 13e91d4 起工作区外路径改为“允许 + 目录审批”，不再禁止 patch。
+    assert "native absolute paths, which are allowed" in patch_description
+    assert "restricted modes ask for directory approval first" in patch_description
+    assert "Files outside WORK_DIR cannot be patched" not in patch_description
     assert "new Add/Update/Delete File section for every file" in patch_description
     assert "*** Update File: relative/path.txt" in patch_description
     assert "-exact old line" in patch_description

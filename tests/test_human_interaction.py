@@ -696,6 +696,7 @@ def test_analyze_approval_returns_advice_without_resolving(monkeypatch):
             "recommendation": "allow",
             "risk": "low",
             "reason": "【命令风险】Read-only repository inspection.\n【命令目的】Show repository state.",
+            "intercept_reason": "",
             "risk_analysis": "Read-only repository inspection.",
             "command_purpose": "Show repository state.",
             "available": True,
