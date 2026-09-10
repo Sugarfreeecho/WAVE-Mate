@@ -12,6 +12,7 @@ const actionsSource = fs.readFileSync(
   path.join(root, 'frontend', 'src', 'app', 'state', 'session-actions.js'),
   'utf8',
 );
+const unreadClearInFlight = new Set();
 
 const ctx = vm.createContext({
   console,
@@ -23,6 +24,9 @@ const ctx = vm.createContext({
   Array,
   persistSessionUnread() {},
   applyServerStreamActiveMap() {},
+  shouldSuppressSessionUnreadSnapshot(session) {
+    return !!session && unreadClearInFlight.has(String(session.id)) && !!session.unread_result;
+  },
 });
 vm.runInContext(`${storeSource}\nglobalThis.__sessionStore = sessionStore;`, ctx);
 vm.runInContext(`${actionsSource}\nglobalThis.__applySessionSnapshot = applySessionSnapshot;`, ctx);
@@ -62,5 +66,37 @@ assert.strictEqual(applySnapshot({
 }), false);
 assert(store.get('latest'), 'a late response from an older request must be ignored');
 assert.strictEqual(store.get('stale'), null);
+
+unreadClearInFlight.add('read-session');
+store.applySnapshot([{
+  id: 'read-session',
+  name: 'Read session',
+  unread_result: true,
+  unread_result_status: 'success',
+  unread_result_run_id: 'run-1',
+}], 0);
+assert.strictEqual(store.get('read-session').unread_result, false);
+assert.strictEqual(store.get('read-session').unread_result_run_id, undefined);
+
+store.upsert({
+  id: 'read-session',
+  name: 'Stale row refresh',
+  unread_result: true,
+  unread_result_status: 'success',
+  unread_result_run_id: 'run-1',
+});
+assert.strictEqual(store.get('read-session').unread_result, false);
+assert.strictEqual(store.get('read-session').unread_result_status, undefined);
+
+unreadClearInFlight.delete('read-session');
+store.upsert({
+  id: 'read-session',
+  name: 'New completion',
+  unread_result: true,
+  unread_result_status: 'success',
+  unread_result_run_id: 'run-2',
+});
+assert.strictEqual(store.get('read-session').unread_result, true);
+assert.strictEqual(store.get('read-session').unread_result_run_id, 'run-2');
 
 process.stdout.write('session store runtime checks passed\n');

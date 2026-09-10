@@ -631,19 +631,28 @@ def _reserve_session_chat_start(sid: str, run_id: str = "") -> Optional[str]:
         import time as _t
         token = str(run_id or "").strip() or str(uuid.uuid4())
         _chat_starting_by_session[x] = (_t.time(), token)
-        return token
+    # 新 run 已经开始：立刻作废 /sessions/state 的缓存快照，避免前端 15s 对账
+    # 读到“run 注册之前”的旧快照 active_runs 而误判本轮已结束。
+    _invalidate_sessions_state_cache()
+    return token
 
 
 def _release_session_chat_start(sid: str, token: str = "") -> None:
     x = str(sid or "").strip()
     if not x:
         return
+    popped = False
     with _chat_start_lock:
         expected = str(token or "").strip()
         current = _chat_starting_by_session.get(x)
         if expected and isinstance(current, tuple) and current[1] != expected:
             return
-        _chat_starting_by_session.pop(x, None)
+        if x in _chat_starting_by_session:
+            _chat_starting_by_session.pop(x, None)
+            popped = True
+    if popped:
+        # run 边界变化：让下一次 /sessions/state 读取重建快照而不是继续服旧值。
+        _invalidate_sessions_state_cache()
 
 
 def _runtime_v2_active_run_info(sid: str) -> dict:
@@ -3045,14 +3054,60 @@ async def delete_subagent(parent_id: str, child_id: str):
 
 
 @fastapi_app.post("/sessions")
-async def create_session():
+async def create_session(req: Request = None):
     started = time.perf_counter()
+    body = {}
+    if req is not None:
+        try:
+            parsed = await req.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            body = {}
+    requested_profile_id = str(body.get("model_profile_id") or "").strip()
+    if requested_profile_id and not model_profiles.is_usable_profile(
+        model_profiles.get_profile(PROJECT_ROOT, requested_profile_id)
+    ):
+        return JSONResponse(
+            content={"error": "unknown model_profile_id"},
+            status_code=422,
+        )
+    requested_permission_mode = str(body.get("permission_mode") or "").strip()
+    if requested_permission_mode:
+        try:
+            from security.models import normalize_permission_mode
+
+            requested_permission_mode = normalize_permission_mode(
+                requested_permission_mode
+            ).value
+        except ValueError as exc:
+            return JSONResponse(content={"error": str(exc)}, status_code=422)
     # Session creation performs several local filesystem writes. Keep those
     # writes off the asyncio event loop so one slow Windows filesystem call
     # cannot freeze heartbeats, streaming, and every other browser request.
-    session_id, _, _, _, _, metadata = await asyncio.to_thread(
-        session_manager.get_or_create_session
-    )
+    if requested_profile_id:
+        session_id, _, _, _, _, metadata = await asyncio.to_thread(
+            session_manager.get_or_create_session,
+            None,
+            model_profile_id=requested_profile_id,
+        )
+    else:
+        session_id, _, _, _, _, metadata = await asyncio.to_thread(
+            session_manager.get_or_create_session
+        )
+    permission_status = None
+    if requested_permission_mode:
+        from security import security_status_for_session, set_session_permission_mode
+
+        await asyncio.to_thread(
+            set_session_permission_mode,
+            session_id,
+            requested_permission_mode,
+        )
+        permission_status = await asyncio.to_thread(
+            security_status_for_session,
+            session_id,
+        )
     _invalidate_sessions_state_cache()
     session = {
         "id": session_id,
@@ -3064,13 +3119,19 @@ async def create_session():
         "pinned": bool((metadata or {}).get("pinned", False)),
         "todo": bool((metadata or {}).get("todo", False)),
         "pinned_at": (metadata or {}).get("pinned_at") if (metadata or {}).get("pinned") else None,
+        "model_profile_id": (metadata or {}).get("model_profile_id") or "",
         "last_user_preview": "",
         "stream_active": False,
     }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     logger.info("create_session_endpoint_timing session=%s total=%sms", session_id, elapsed_ms)
     return JSONResponse(
-        content={"session_id": session_id, "session": session},
+        content={
+            "session_id": session_id,
+            "session": session,
+            "model_profile_id": requested_profile_id,
+            "permission_status": permission_status,
+        },
         headers={"Server-Timing": f"session-create;dur={elapsed_ms}"},
     )
 
@@ -3238,6 +3299,16 @@ async def set_security_settings(req: Request):
         }
     )
     return JSONResponse({"ok": True, **settings})
+
+
+@fastapi_app.get("/api/security/permissions")
+async def get_global_permissions():
+    try:
+        from security import security_status_for_session
+
+        return JSONResponse({"ok": True, **security_status_for_session("")})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @fastapi_app.get("/api/security/rules")
@@ -3567,7 +3638,7 @@ async def interrupt_session(session_id: str, request: Request):
         reason = "unspecified"
     session_manager.request_interrupt(sid, run_id, reason=reason)
     if reason != "followup":
-        session_manager.mark_session_unread_result(sid, status="failed")
+        session_manager.mark_session_unread_result(sid, status="failed", run_id=run_id)
     _active_chat_by_session.pop(sid, None)
     _active_chat_last_seen.pop(sid, None)
     interrupted_run_ids = _interrupt_runtime_v2_active_runs(sid, run_id, reason=reason)
@@ -4894,6 +4965,18 @@ async def chat(
                     await asyncio.sleep(0)  # 让 ASGI/uvicorn 尽快把分块刷到客户端，利于工具/LLM 分条显示
                 if not await request.is_disconnected():
                     yield "data: [DONE]\n\n"
+            except GeneratorExit:
+                # 浏览器 abort/fetch 取消时 ASGI 常以 GeneratorExit 拆除 SSE 生成器
+                # （而不是 CancelledError）。此刻只是“观察者离开”，绝不能 stop_event
+                # 误杀仍在后台运行的 run，否则会落盘 run_interrupted(reason=unspecified)，
+                # 并被前端显示为误导性的“运行中断”终态文案，干扰定位。
+                client_disconnected = True
+                if sid:
+                    try:
+                        await _schedule_ui_closed_notify()
+                    except Exception:
+                        logger.debug("ui-closed notify schedule failed", exc_info=True)
+                return
             except asyncio.CancelledError:
                 # 浏览器主动断开 SSE 连接属于正常情况，避免打印冗长异常栈
                 client_disconnected = True
@@ -6189,9 +6272,16 @@ async def todo_session(session_id: str, todo: bool = Form(...)):
 
 
 @fastapi_app.post("/sessions/{session_id}/unread-result/clear")
-async def clear_session_unread_result(session_id: str):
-    session_manager.clear_session_unread_result(session_id)
-    return JSONResponse(content={"status": "ok"})
+async def clear_session_unread_result(
+    session_id: str,
+    expected_run_id: str = Query(""),
+):
+    cleared = session_manager.clear_session_unread_result(
+        session_id,
+        expected_run_id=expected_run_id,
+    )
+    _invalidate_sessions_state_cache()
+    return JSONResponse(content={"status": "ok", "cleared": bool(cleared)})
 
 
 @fastapi_app.post("/sessions/{session_id}/truncate")

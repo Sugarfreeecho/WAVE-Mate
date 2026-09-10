@@ -201,7 +201,8 @@ function applySessionItemIndicators(itemDiv, sessionId, opts) {
     if (nameEl) nameEl.removeAttribute('data-ui-tip');
     var sess = sessionStore.get(sessionId);
     var localUnreadResult = sessionUnreadComplete.has(sessionId);
-    var hasUnreadResult = sess ? !!sess.unread_result : localUnreadResult;
+    var isSelectedSession = String(sessionId) === String(currentSessionId || '');
+    var hasUnreadResult = !isSelectedSession && (sess ? !!sess.unread_result : localUnreadResult);
     var failed = !!(sess && sess.unread_result_status === 'failed');
     var running = isSessionRunning(sessionId);
     var finalizing = running && sessionStore.isRunFinalizing(sessionId);
@@ -282,7 +283,9 @@ function closeAllSessionMenus() {
             var nameEl = row.querySelector('.session-name[data-id]');
             sid = nameEl ? nameEl.getAttribute('data-id') : '';
         }
-        if (sid && sid !== currentSessionId) {
+        if (sid && sid === currentSessionId) {
+            clearSessionUnreadState(sid);
+        } else if (sid) {
             Promise.resolve(switchSession(sid)).catch(function (err) {
                 console.error('切换会话失败:', err);
             });
@@ -660,6 +663,7 @@ async function refreshSingleSessionRow(sessionId) {
             session: sess,
             session_id: sess.id,
         });
+        const appliedSession = sessionStore.get(sess.id) || sess;
         sessionStore.applyActiveRunForSession(
             sess.id,
             sess.active_run || (sess.run_active ? {
@@ -668,7 +672,7 @@ async function refreshSingleSessionRow(sessionId) {
                 started_at: sess.run_started_at || null,
             } : null)
         );
-        if (sess.unread_result) {
+        if (appliedSession.unread_result) {
             if (!sessionUnreadComplete.has(sess.id)) {
                 sessionUnreadComplete.add(sess.id);
                 persistSessionUnread();
@@ -1205,11 +1209,28 @@ async function reconcileRunStateFromServer(opts) {
     localIds.forEach(function (sid) {
         if (!active.has(sid)) {
             var run = getSessionRunState(sid);
+            // 本地仍在消费 SSE 且未见真终态时不得误杀：/sessions/state 轻快照有 5s TTL
+            // 且在“新一轮刚启动”的首步窗口可能瞬时报 inactive；15s reconcile 若此时
+            // abort/endRun 会收起过程框并 seal，导致后续增量无处渲染而“卡死”。
+            var streamAlive = !!(run && run.ctx && run.ctx.streamConsuming && run.ctx.terminalSeen !== true);
+            if (streamAlive) return;
             var staleSubmittedStream = !!(
                 run && run.submitted && run.ctx && run.ctx.streamConsuming
             );
             if (run && (run.reattached || staleSubmittedStream || run.transportClosed)) {
                 abortSessionRun(sid, 'reconcile-finished');
+                if (run.ctx && typeof endRunForClient === 'function') {
+                    // A missing terminal SSE event must not leave the process
+                    // panel running after the server has already ended this run.
+                    endRunForClient(sid, run.ctx, {
+                        runId: run.runId,
+                        drainFollowup: false,
+                        syncFollowup: false,
+                        scroll: false,
+                        // 对账路径不是真终态：禁止折叠/封印过程框（渲染中的内容仍需收尾）。
+                        collapseProcess: false,
+                    });
+                }
             }
         }
     });
@@ -1571,7 +1592,10 @@ function beforeSessionMessageSnapshotAvailable() {
 async function switchSession(sessionId, opts) {
     opts = opts || {};
     if (typeof endHistorySmoothScroll === 'function') endHistorySmoothScroll();
-    if (currentSessionId === sessionId && !opts.forceReload) return;
+    if (currentSessionId === sessionId && !opts.forceReload) {
+        clearSessionUnreadState(sessionId);
+        return true;
+    }
     const switchStartedAt = performance.now();
     if (opts.forceReload && typeof discardCachedSessionStream === 'function') discardCachedSessionStream(sessionId);
     const switchToken = ++switchSessionEpoch;
@@ -1814,15 +1838,65 @@ async function materializeNewSession() {
     return materializeNewSessionQueue;
 }
 
+async function applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, createResponse) {
+    const tasks = [];
+    if (createOptions.model_profile_id
+        && String(createResponse.model_profile_id || '') !== String(createOptions.model_profile_id)) {
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/model_profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ profile_id: createOptions.model_profile_id }),
+        }).then(async function (response) {
+            const data = await response.json();
+            if (!response.ok || !data || !data.ok) {
+                throw new Error((data && data.error) || '模型配置应用失败');
+            }
+        }));
+    }
+    if (createOptions.permission_mode
+        && (!createResponse.permission_status
+            || String(createResponse.permission_status.mode || '') !== String(createOptions.permission_mode))) {
+        tasks.push(fetch('/sessions/' + encodeURIComponent(sessionId) + '/permissions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ mode: createOptions.permission_mode }),
+        }).then(async function (response) {
+            const data = await response.json();
+            if (!response.ok || !data || !data.ok) {
+                throw new Error((data && data.error) || '权限等级应用失败');
+            }
+            createResponse.permission_status = data;
+        }));
+    }
+    if (tasks.length) await Promise.all(tasks);
+}
+
 async function materializeNewSessionInner() {
     const draftEpoch = switchSessionEpoch;
     const createStartedAt = performance.now();
+    let createdSessionId = '';
     try {
-        const response = await fetch('/sessions', { method: 'POST' });
+        const createOptions = {};
+        if (typeof newSessionModelProfileId === 'function') {
+            const modelProfileId = newSessionModelProfileId();
+            if (modelProfileId) createOptions.model_profile_id = modelProfileId;
+        }
+        if (typeof selectedNewSessionPermissionMode === 'function') {
+            const permissionMode = selectedNewSessionPermissionMode();
+            if (permissionMode) createOptions.permission_mode = permissionMode;
+        }
+        const response = await fetch('/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(createOptions),
+        });
         if (!response.ok) throw new Error('HTTP ' + response.status);
         const data = await response.json();
         if (!data || !data.session_id) throw new Error('服务端未返回会话 ID');
         const sessionId = String(data.session_id);
+        createdSessionId = sessionId;
         const session = data.session || { id: sessionId, name: '新会话' };
         sessionStore.protectFromSnapshots(session);
 
@@ -1841,10 +1915,19 @@ async function materializeNewSessionInner() {
             // of truth and restoring an older value causes the visible blink.
             if (typeof renderFollowupQueue === 'function') renderFollowupQueue(sessionId);
             if (typeof syncFollowupQueueFromServer === 'function') syncFollowupQueueFromServer(sessionId);
-            if (typeof refreshModelProfileSelector === 'function') refreshModelProfileSelector(sessionId);
         }
         syncArchivedSessionStateFromStore();
         renderSessionListIfChanged(false);
+        await applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data);
+        if (typeof commitNewSessionModelProfile === 'function') {
+            commitNewSessionModelProfile(sessionId);
+        }
+        if (typeof commitNewSessionPermissionMode === 'function') {
+            commitNewSessionPermissionMode(data.permission_status || null);
+        }
+        if (ownsDraft && typeof refreshModelProfileSelector === 'function') {
+            refreshModelProfileSelector(sessionId);
+        }
         document.dispatchEvent(new CustomEvent('myagent:extension-state-changed', {
             detail: { sessionId: sessionId, phase: 'created' },
         }));
@@ -1854,7 +1937,9 @@ async function materializeNewSessionInner() {
         return sessionId;
     } catch (error) {
         console.error('创建新会话失败', error);
-        if (!currentSessionId && switchSessionEpoch === draftEpoch) {
+        if (createdSessionId) {
+            appendLogVisible('新会话配置应用失败，请重新选择模型或权限后再发送', 'error-log');
+        } else if (!currentSessionId && switchSessionEpoch === draftEpoch) {
             appendLogVisible('创建新会话失败，请重试发送', 'error-log');
         }
         return null;

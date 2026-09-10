@@ -151,15 +151,21 @@ function endRunForClient(sessionId, ctx, opts) {
     // sealProcessGroup clears currentProcessGroup, so appendMessage cannot be
     // relied on to collapse the trace afterwards (and duplicate finals skip it
     // altogether). Collapse while the terminal aggregate is still reachable.
-    var terminalAggregate = ctx && ctx.currentProcessGroup;
-    if (terminalAggregate && terminalAggregate.isConnected
-        && !terminalAggregate.classList.contains('subagent-grid-card')) {
-        terminalAggregate.classList.add('is-collapsed');
-        var terminalTop = terminalAggregate.querySelector('.process-aggregate-top');
-        if (terminalTop) terminalTop.setAttribute('aria-expanded', 'false');
-        updateProcessBrief(terminalAggregate);
+    // 但中途 reconcile 误调 endRun 时绝不能折叠/seal，否则后续流式增量无处渲染而“卡死”。
+    // 仅真终态（terminalSeen）或显式 collapseProcess:true 才允许折叠/seal。
+    var isTrueTerminal = !!(ctx && ctx.terminalSeen === true) || opts.collapseProcess === true;
+    var allowCollapse = isTrueTerminal && opts.collapseProcess !== false;
+    if (allowCollapse) {
+        var terminalAggregate = ctx && ctx.currentProcessGroup;
+        if (terminalAggregate && terminalAggregate.isConnected
+            && !terminalAggregate.classList.contains('subagent-grid-card')) {
+            terminalAggregate.classList.add('is-collapsed');
+            var terminalTop = terminalAggregate.querySelector('.process-aggregate-top');
+            if (terminalTop) terminalTop.setAttribute('aria-expanded', 'false');
+            updateProcessBrief(terminalAggregate);
+        }
+        sealProcessGroup(ctx);
     }
-    sealProcessGroup(ctx);
     // The process viewport is resolved through the active run context. Finish
     // its pending row-height animation and bottom pin before clearing that
     // context, otherwise end-of-run status rows can be left below the visible
@@ -254,17 +260,68 @@ function handoffSessionStreamAfterHumanInteraction(sessionId, afterIndex) {
     tryAttach(0);
 }
 
+var streamHistoryRecoveryBySession = new Set();
+var finalRecoveryBySession = new Map();
+
+async function checkSessionStreamProgress(sessionId, ctx) {
+    if (!ctx || !ctx.streamConsuming || sessionId !== currentSessionId || ctx.progressCheckPending) return;
+    ctx.progressCheckPending = true;
+    try {
+        await reconcileRunStateFromServer({ silent: true });
+        if (sessionId !== currentSessionId || !ctx.streamConsuming) return;
+        var run = getSessionRunState(sessionId);
+        if (!run || run.ctx !== ctx) {
+            if (!isServerStreamActive(sessionId)) {
+                await ensureFinalVisibleAfterRunIfEnabled(sessionId, ctx, {});
+            }
+            return;
+        }
+        // Keepalives prove transport activity, not delivery of durable events.
+        // A quiet long-running tool is healthy unless the server has newer history.
+        if (Date.now() - ctx.lastBusinessEventAt < 30000) return;
+        var count = await getUiEventCount(sessionId, { preferCache: false });
+        if (sessionId !== currentSessionId || getSessionRunState(sessionId) !== run) return;
+        if (Number(count) > Number(ctx.streamEventIndex)) {
+            streamHistoryRecoveryBySession.add(sessionId);
+            markRunAbortReason(run, 'stream-history-gap');
+            run.controller.abort();
+        }
+    } catch (error) {
+        console.warn('stream progress check failed:', error);
+    } finally {
+        ctx.progressCheckPending = false;
+    }
+}
+
 async function consumeAgentSseResponse(response, runCtx, runSessionId, streamEventIdx) {
     if (!response || !response.body) throw new Error('stream response missing body');
     var ct0 = (response.headers && response.headers.get ? (response.headers.get('content-type') || '') : '').toLowerCase();
     if (!response.ok || ct0.indexOf('text/event-stream') < 0) {
         throw new Error('stream response failed: ' + (response.status || 'no status'));
     }
-    if (runCtx) runCtx.streamConsuming = true;
+    if (runCtx) {
+        runCtx.streamConsuming = true;
+        runCtx.streamEventIndex = streamEventIdx;
+        runCtx.lastBusinessEventAt = Date.now();
+    }
+    const progressTimer = setInterval(function () {
+        void checkSessionStreamProgress(runSessionId, runCtx);
+    }, 15000);
     try {
         return await consumeAgentSseResponseInner(response, runCtx, runSessionId, streamEventIdx);
     } finally {
+        clearInterval(progressTimer);
         if (runCtx) runCtx.streamConsuming = false;
+        var closingRun = getSessionRunState(runSessionId);
+        if (runCtx && closingRun && closingRun.ctx === runCtx && runCtx.terminalSeen !== true
+            && getRunAbortReason(runSessionId, runCtx) !== 'user') {
+            streamHistoryRecoveryBySession.add(runSessionId);
+            clearSessionRunState(runSessionId);
+            // Let the caller finish its cleanup before acquiring another stream.
+            setTimeout(function () {
+                scheduleActiveSessionReconnect(runSessionId, { delayMs: 100, failure: true });
+            }, 0);
+        }
     }
 }
 
@@ -303,6 +360,7 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
             try {
                 let parsed = JSON.parse(data);
                 if (parsed && (parsed.type === 'sse_keepalive' || parsed.keepalive === true)) continue;
+                if (runCtx) runCtx.lastBusinessEventAt = Date.now();
                 if (parsed && parsed.protocol === 'runtime_v2') {
                     const envelopeSessionId = parsed.session_id || parsed.sessionId || runSessionId;
                     if (!sessionStore.shouldAcceptSseEvent(envelopeSessionId, parsed.seq, 'runtime_v2')) continue;
@@ -508,12 +566,10 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     continue;
                 }
                 if (parsed.type === 'final') {
-                    if (eventSessionId === runSessionId) {
-                        markRunFinalSeen(runCtx);
-                    }
                     var finalStream = runCtx && runCtx.stream && runCtx.stream.isConnected ? runCtx.stream : getVisibleChatStream();
                     var finalLastUserIdx = latestVisibleUserEventIndex(finalStream);
                     if (hasDuplicateVisibleFinal(finalStream, finalLastUserIdx, parsed.content)) {
+                        if (eventSessionId === runSessionId) markRunFinalSeen(runCtx);
                         streamEventIdx += 1;
                         continue;
                     }
@@ -523,8 +579,16 @@ async function consumeAgentSseResponseInner(response, runCtx, runSessionId, stre
                     event: parsed,
                     source: 'sse',
                 }, runSessionId);
+                if (parsed.type === 'final' && eventSessionId === runSessionId) markRunFinalSeen(runCtx);
                 streamEventIdx += 1;
-            } catch (e) { console.error('解析事件失败:', e); }
+            } catch (e) {
+                // The sequence filter may already have advanced. Replay durable
+                // history on reconnect instead of silently losing the failed row.
+                streamHistoryRecoveryBySession.add(runSessionId);
+                throw e;
+            } finally {
+                if (runCtx) runCtx.streamEventIndex = streamEventIdx;
+            }
         }
     }
     scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
@@ -630,12 +694,65 @@ async function ensureFinalVisibleAfterRun(sessionId, ctx, opts) {
     if (storedFinal) {
         if (renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)) return true;
     }
-    var delayMs = Math.max(0, Number(opts.delayMs) || 0);
-    if (delayMs) await new Promise(function (resolve) { setTimeout(resolve, delayMs); });
-    if (sid !== currentSessionId) return false;
-    stream = getVisibleChatStream();
-    if (!stream || hasVisibleFinalAfterUser(stream, lastUserIdx)) return true;
-    return false;
+    var epoch = messageLoadEpoch;
+    var ownerStream = stream;
+    var runId = String(ctx && ctx.runId || '');
+    var key = sid + ':' + lastUserIdx + ':' + runId + ':' + epoch;
+    if (finalRecoveryBySession.has(key)) return finalRecoveryBySession.get(key);
+    function stillOwnsView() {
+        if (sid !== currentSessionId || epoch !== messageLoadEpoch
+            || getVisibleChatStream() !== ownerStream
+            || latestVisibleUserEventIndex(ownerStream) !== lastUserIdx) return false;
+        var run = getSessionRunState(sid);
+        return !run || run.ctx === ctx || (runId && String(run.runId || '') === runId);
+    }
+    var recovery = (async function () {
+        var delays = [Math.max(0, Number(opts.delayMs) || 0), 300, 1000];
+        for (var attempt = 0; attempt < delays.length; attempt += 1) {
+            if (delays[attempt]) await sleepMs(delays[attempt]);
+            if (!stillOwnsView()) return false;
+            if (hasVisibleFinalAfterUser(ownerStream, lastUserIdx)) return true;
+            var page;
+            var recoveryController = new AbortController();
+            var recoveryTimer = setTimeout(function () { recoveryController.abort(); }, 5000);
+            try {
+                var response = await fetchWithTimeout('/sessions/' + encodeURIComponent(sid)
+                    + '/messages?turns=1&event_budget=128', { cache: 'no-store', signal: recoveryController.signal }, 5000);
+                if (!response.ok) throw new Error('final history fetch failed: ' + response.status);
+                page = await response.json();
+            } catch (error) {
+                if (attempt === delays.length - 1) throw error;
+                continue;
+            } finally {
+                // Include body consumption, not only receipt of HTTP headers.
+                clearTimeout(recoveryTimer);
+            }
+            if (!stillOwnsView()) return false;
+            var events = Array.isArray(page) ? page : (page && page.events || []);
+            var start = Array.isArray(page) ? 0 : Number(page.range_start) || 0;
+            if (!Array.isArray(events)) return false;
+            // A bounded tail can omit the newer user row itself. Its requested
+            // turn boundary still tells us that the reply belongs to a new turn.
+            if (page && Number(page.requested_range_start) > lastUserIdx) return false;
+            // A new turn may have started in another tab while this fetch waited.
+            if (events.some(function (event, index) {
+                return event.type === 'user' && start + index > lastUserIdx;
+            })) return false;
+            for (var index = events.length - 1; index >= 0; index -= 1) {
+                var event = events[index];
+                if (event.type !== 'final' || start + index <= lastUserIdx || event.agent_id) continue;
+                if (runId && event.run_id && String(event.run_id) !== runId) continue;
+                var record = applyMessageEvent(sid, event, start + index, 'recovery');
+                var rendered = renderFinalRecordIfMissing(sid, ctx, ownerStream, record, lastUserIdx);
+                if (rendered) markRunFinalSeen(ctx);
+                return rendered;
+            }
+        }
+        return false;
+    })();
+    finalRecoveryBySession.set(key, recovery);
+    try { return await recovery; }
+    finally { finalRecoveryBySession.delete(key); }
 }
 
 async function startContinueAfterSubagents(sessionId) {
@@ -932,6 +1049,10 @@ async function attachSessionEventStream(sessionId, opts) {
     opts = opts || {};
     if (!sessionId || getSessionRunState(sessionId)) return;
     if (!opts.force && !isServerStreamActive(sessionId)) return;
+    if (streamHistoryRecoveryBySession.has(sessionId)) {
+        opts = Object.assign({}, opts, { skipInitialLoad: false });
+        delete opts.afterIndex;
+    }
     var runSessionId = sessionId;
     var runCtx = null;
     var reattachFailed = false;
@@ -940,6 +1061,7 @@ async function attachSessionEventStream(sessionId, opts) {
         if (!opts.skipInitialLoad) {
             await loadSessionMessages(runSessionId, 'saved-or-bottom', { preloadOlderIfShort: true });
             if (runSessionId !== currentSessionId) return;
+            streamHistoryRecoveryBySession.delete(runSessionId);
         } else if (!Number.isFinite(Number(opts.afterIndex)) && typeof ensureLatestHistoryTailForLiveAppend === 'function') {
             var attachTailReady = await ensureLatestHistoryTailForLiveAppend(runSessionId);
             if (!attachTailReady || runSessionId !== currentSessionId) return;
@@ -1005,7 +1127,7 @@ async function attachSessionEventStream(sessionId, opts) {
             && !isServerStreamActive(runSessionId)) {
             scheduleFinalVisibleAfterRunIfEnabled(runSessionId, runCtx, { delayMs: 120 });
         }
-        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).reattached) {
+        if (getSessionRunState(runSessionId) && getSessionRunState(runSessionId).ctx === runCtx) {
             clearSessionRunState(runSessionId);
         }
         setSendButtonState();

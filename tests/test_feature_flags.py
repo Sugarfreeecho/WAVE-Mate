@@ -336,11 +336,10 @@ def test_frontend_feature_entrypoints_are_flag_guarded():
     assert "function markRunFinalSeen(ctx)" in sse
     assert "function initRunFinalTracking(ctx)" in sse
     assert "if (ctx && ctx.seenFinal === true) return;" in sse
-    assert "if (eventSessionId === runSessionId) {" in sse
     assert "markRunFinalSeen(runCtx);" in sse
     assert "runCtx.terminalSeen = true;" in sse
     assert "Transport completion is not a run outcome" in sse
-    assert "await ensureFinalVisibleAfterRunIfEnabled" not in sse
+    assert "await ensureFinalVisibleAfterRunIfEnabled" in sse
     assert "function fetchLatestStoredFinalRecord" not in sse
     assert "var latestFinal = await fetchLatestStoredFinalRecord(sid);" not in sse
     assert "messages?limit=120" not in sse
@@ -553,7 +552,7 @@ def test_chat_busy_response_rolls_back_optimistic_message_into_queue():
     assert "uiEventCountCache.updateFromServer(sid, before)" in sse
 
 
-def test_frontend_final_reconcile_is_local_store_only():
+def test_frontend_final_reconcile_checks_local_store_before_bounded_server_recovery():
     sse = (ROOT / "frontend/src/app/modules/sse-handling.js").read_text(encoding="utf-8")
     final_block = re.search(
         r"async function ensureFinalVisibleAfterRun\(sessionId, ctx, opts\) \{(?P<body>.*?)\n\}",
@@ -565,8 +564,8 @@ def test_frontend_final_reconcile_is_local_store_only():
 
     assert "findStoredFinalAfterUser(sid, lastUserIdx)" in body
     assert "renderFinalRecordIfMissing(sid, ctx, stream, storedFinal, lastUserIdx)" in body
-    assert "fetch(" not in body
-    assert "/messages" not in body
+    assert "/messages?turns=1&event_budget=128" in body
+    assert "stillOwnsView()" in body
 
 
 def test_removed_high_risk_dom_stream_shims_do_not_return():
@@ -984,7 +983,11 @@ def test_frontend_new_session_is_local_until_first_send_and_coalesces_materializ
     assert "setWelcome();" in draft_body
     assert "restoreInputDraft(null);" in draft_body
     assert "if (materializeNewSessionQueue) return materializeNewSessionQueue;" in materialize_body
-    assert "await fetch('/sessions', { method: 'POST' })" in materialize_body
+    assert "const response = await fetch('/sessions', {" in materialize_body
+    assert "body: JSON.stringify(createOptions)" in materialize_body
+    assert "createOptions.model_profile_id = modelProfileId;" in materialize_body
+    assert "createOptions.permission_mode = permissionMode;" in materialize_body
+    assert "applyNewSessionOptionsToLegacyBackend(sessionId, createOptions, data)" in materialize_body
     assert "sessionStore.protectFromSnapshots(session);" in materialize_body
     assert "restoreInputDraft(sessionId)" not in materialize_body
     assert "submitSessionId = await materializeNewSession();" in sse
@@ -993,6 +996,22 @@ def test_frontend_new_session_is_local_until_first_send_and_coalesces_materializ
     assert "sessionId ? String(sessionId) : NEW_SESSION_DRAFT_KEY" in skills
     assert "persistInputDraft(currentSessionId, messageInput.value);" in rendering
     assert "lastSessionId === NEW_SESSION_DRAFT_KEY" in layout
+
+
+def test_frontend_new_session_model_and_permission_controls_use_draft_state():
+    models = (ROOT / "frontend/src/app/modules/model-profiles.js").read_text(encoding="utf-8")
+    permissions = (ROOT / "frontend/src/app/modules/permissions.js").read_text(encoding="utf-8")
+    sessions = (ROOT / "frontend/src/app/modules/session-management.js").read_text(encoding="utf-8")
+
+    assert "function setNewSessionModelProfileId(profileId)" in models
+    assert "if (!sid) {" in models
+    assert "setNewSessionModelProfileId(selectedProfileId);" in models
+    assert "function setNewSessionPermissionMode(mode)" in permissions
+    assert "trigger.disabled = !controlsEnabled || permissionModeBusy;" in permissions
+    assert "if (!currentSessionId) {" in permissions
+    assert "setNewSessionPermissionMode(mode);" in permissions
+    assert "commitNewSessionModelProfile(sessionId);" in sessions
+    assert "commitNewSessionPermissionMode(data.permission_status || null);" in sessions
 
 
 def test_frontend_llm_stream_rows_are_upserted_across_process_group_rebuilds():

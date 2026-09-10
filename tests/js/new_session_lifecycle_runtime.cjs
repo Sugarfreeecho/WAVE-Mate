@@ -15,6 +15,9 @@ const lifecycleSource = source.slice(start);
 let fetchCalls = 0;
 let releaseCreate;
 let restoredRealSession = false;
+let createRequestOptions = null;
+let committedModelSession = '';
+let committedPermissionStatus = null;
 const createGate = new Promise((resolve) => { releaseCreate = resolve; });
 const stream = { querySelector: () => null };
 const messageInput = { value: '', focus() {} };
@@ -64,6 +67,10 @@ const ctx = vm.createContext({
     protected: null,
     protectFromSnapshots(session) { this.protected = session; },
   },
+  newSessionModelProfileId: () => 'profile-fast',
+  selectedNewSessionPermissionMode: () => 'approve_for_me',
+  commitNewSessionModelProfile(sessionId) { committedModelSession = sessionId; },
+  commitNewSessionPermissionMode(status) { committedPermissionStatus = status; },
   readStoredInputDraft: () => 'stored draft',
   persisted: [],
   persistInputDraft(sessionId, value) { ctx.persisted.push([sessionId, value]); },
@@ -78,12 +85,18 @@ const ctx = vm.createContext({
   scheduleContextTokensAfterPaint() {},
   uiPerformance: undefined,
   appendLogVisible() {},
-  fetch: async () => {
+  fetch: async (_url, options) => {
     fetchCalls += 1;
+    createRequestOptions = options;
     await createGate;
     return {
       ok: true,
-      json: async () => ({ session_id: 'created', session: { id: 'created', name: 'New' } }),
+      json: async () => ({
+        session_id: 'created',
+        session: { id: 'created', name: 'New' },
+        model_profile_id: 'profile-fast',
+        permission_status: { mode: 'approve_for_me' },
+      }),
     };
   },
 });
@@ -105,12 +118,18 @@ vm.runInContext(
   const materializing = ctx.__materializeNewSession();
   await Promise.resolve();
   assert.strictEqual(fetchCalls, 1, 'the first send materializes exactly one session');
+  assert.deepStrictEqual(JSON.parse(createRequestOptions.body), {
+    model_profile_id: 'profile-fast',
+    permission_mode: 'approve_for_me',
+  });
   releaseCreate();
   assert.strictEqual(await materializing, 'created');
   assert.strictEqual(messageInput.value, 'live text must survive');
   assert.strictEqual(restoredRealSession, false, 'POST completion must not restore over live input');
   assert.deepStrictEqual(ctx.persisted[0], ['created', 'live text must survive']);
   assert.strictEqual(ctx.sessionStore.protected.id, 'created');
+  assert.strictEqual(committedModelSession, 'created');
+  assert.deepStrictEqual(committedPermissionStatus, { mode: 'approve_for_me' });
 
   process.stdout.write('new session lifecycle runtime checks passed\n');
 })().catch((error) => {

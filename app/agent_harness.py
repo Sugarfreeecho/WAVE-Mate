@@ -3002,7 +3002,7 @@ class SessionManager:
                 pinned_at = meta.get("pinned_at")
                 if pinned and not pinned_at:
                     pinned_at = updated_at
-                by_id[sid] = {
+                entry = {
                     "id": sid,
                     "name": name,
                     "created_at": created_at,
@@ -3017,6 +3017,10 @@ class SessionManager:
                     "unread_result_status": str(meta.get("unread_result_status") or "success"),
                     "last_user_preview": str(meta.get("last_user_preview") or ""),
                 }
+                unread_result_run_id = str(meta.get("unread_result_run_id") or "").strip()
+                if unread_result_run_id:
+                    entry["unread_result_run_id"] = unread_result_run_id
+                by_id[sid] = entry
         except FileNotFoundError:
             pass
         self.index = sorted(
@@ -6029,7 +6033,12 @@ class SessionManager:
         )
         return True
 
-    def get_or_create_session(self, session_id: Optional[str] = None) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
+    def get_or_create_session(
+        self,
+        session_id: Optional[str] = None,
+        *,
+        model_profile_id: str = "",
+    ) -> Tuple[str, List[dict], List[dict], List[dict], str, dict]:
         """
         获取或创建会话，返回:
         (session_id, dialogue, work_messages, llm_history, key_context, metadata)
@@ -6068,6 +6077,9 @@ class SessionManager:
                 # latency on Windows when the volume is busy or being scanned.
                 "authorized_dirs": [str(WORK_DIR)],
             }
+            requested_profile_id = str(model_profile_id or "").strip()
+            if requested_profile_id:
+                metadata["model_profile_id"] = requested_profile_id
             dialogue: List[dict] = []  # 与 dialogue_history.json 均由 ui_events 主链写入
             metadata_ready = time.perf_counter()
             # A freshly generated UUID cannot be present in the deleted-session
@@ -6574,7 +6586,12 @@ class SessionManager:
                 break
         self._save_index()
 
-    def mark_session_unread_result(self, session_id: str, status: str = "success") -> None:
+    def mark_session_unread_result(
+        self,
+        session_id: str,
+        status: str = "success",
+        run_id: str = "",
+    ) -> None:
         sid = self._normalize_session_id(session_id)
         if self._is_deleted_session(sid):
             return
@@ -6582,6 +6599,7 @@ class SessionManager:
         if not meta_path.exists():
             return
         result_status = "failed" if str(status or "").lower() == "failed" else "success"
+        result_run_id = str(run_id or "").strip()
         now = datetime.now().isoformat()
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
@@ -6595,6 +6613,10 @@ class SessionManager:
             metadata["unread_result"] = True
             metadata["unread_result_at"] = now
             metadata["unread_result_status"] = result_status
+            if result_run_id:
+                metadata["unread_result_run_id"] = result_run_id
+            else:
+                metadata.pop("unread_result_run_id", None)
             self._save_metadata_unlocked(sid, metadata)
         changed = False
         with self._lock:
@@ -6605,37 +6627,55 @@ class SessionManager:
                     sess["unread_result"] = True
                     sess["unread_result_at"] = now
                     sess["unread_result_status"] = result_status
+                    if result_run_id:
+                        sess["unread_result_run_id"] = result_run_id
+                    else:
+                        sess.pop("unread_result_run_id", None)
                     changed = True
                     break
         if changed:
             self._save_index()
 
-    def clear_session_unread_result(self, session_id: str) -> None:
+    def clear_session_unread_result(
+        self,
+        session_id: str,
+        expected_run_id: str = "",
+    ) -> bool:
         sid = self._normalize_session_id(session_id)
         if self._is_deleted_session(sid):
-            return
+            return False
         meta_path = self._get_metadata_path(sid)
         if not meta_path.exists():
-            return
+            return False
+        expected = str(expected_run_id or "").strip()
         with self._session_metadata_lock(sid):
             metadata = self._load_metadata_unlocked(sid)
             if not isinstance(metadata, dict):
                 metadata = {}
+            current_run_id = str(metadata.get("unread_result_run_id") or "").strip()
+            if expected and current_run_id and current_run_id != expected:
+                return False
             metadata["unread_result"] = False
             metadata.pop("unread_result_at", None)
             metadata.pop("unread_result_status", None)
+            metadata.pop("unread_result_run_id", None)
             self._save_metadata_unlocked(sid, metadata)
         changed = False
         with self._lock:
             for sess in self.index:
                 if sess.get("id") == sid:
+                    current_run_id = str(sess.get("unread_result_run_id") or "").strip()
+                    if expected and current_run_id and current_run_id != expected:
+                        break
                     sess["unread_result"] = False
                     sess.pop("unread_result_at", None)
                     sess.pop("unread_result_status", None)
+                    sess.pop("unread_result_run_id", None)
                     changed = True
                     break
         if changed:
             self._save_index()
+        return True
 
     def request_interrupt(self, session_id: str, run_id: str = "", reason: str = "user"):
         """请求中断指定会话当前执行。"""

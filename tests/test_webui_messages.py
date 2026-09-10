@@ -174,6 +174,55 @@ def test_create_session_moves_filesystem_work_off_event_loop(monkeypatch):
     assert invalidations == [True]
 
 
+def test_create_session_applies_draft_model_and_permission_options(monkeypatch):
+    import security
+    import webui
+
+    observed = {}
+
+    class _Request:
+        async def json(self):
+            return {
+                "model_profile_id": "profile-fast",
+                "permission_mode": "approve_for_me",
+            }
+
+    class _CreateManager:
+        def get_or_create_session(self, session_id=None, *, model_profile_id=""):
+            observed["model_profile_id"] = model_profile_id
+            metadata = {
+                "name": "新会话",
+                "created_at": "2026-09-09T12:00:00",
+                "updated_at": "2026-09-09T12:00:00",
+                "model_profile_id": model_profile_id,
+            }
+            return "configured-session", [], [], [], "", metadata
+
+    monkeypatch.setattr(webui, "session_manager", _CreateManager())
+    monkeypatch.setattr(webui.model_profiles, "get_profile", lambda _root, pid: {"id": pid})
+    monkeypatch.setattr(webui.model_profiles, "is_usable_profile", lambda profile: bool(profile))
+    monkeypatch.setattr(webui, "_invalidate_sessions_state_cache", lambda: None)
+    monkeypatch.setattr(
+        security,
+        "set_session_permission_mode",
+        lambda sid, mode: observed.update(permission=(sid, mode)),
+    )
+    monkeypatch.setattr(
+        security,
+        "security_status_for_session",
+        lambda sid: {"mode": "approve_for_me", "session_id": sid},
+    )
+
+    response = asyncio.run(webui.create_session(_Request()))
+    payload = _json_response_payload(response)
+
+    assert response.status_code == 200
+    assert observed["model_profile_id"] == "profile-fast"
+    assert observed["permission"] == ("configured-session", "approve_for_me")
+    assert payload["model_profile_id"] == "profile-fast"
+    assert payload["permission_status"]["mode"] == "approve_for_me"
+
+
 def test_clipboard_upload_returns_insertable_workspace_path(monkeypatch, tmp_path):
     from io import BytesIO
     from starlette.datastructures import UploadFile
@@ -1375,6 +1424,34 @@ def test_lightweight_status_does_not_treat_terminal_transport_as_active(monkeypa
     assert state["stream_active"] is False
     assert state["active_run"] is None
     assert state["stream_connections"] == 1
+
+
+def test_clear_unread_result_is_run_scoped_and_invalidates_state_cache(monkeypatch):
+    import webui
+
+    calls = []
+    invalidations = []
+
+    class Manager:
+        def clear_session_unread_result(self, session_id, expected_run_id=""):
+            calls.append((session_id, expected_run_id))
+            return expected_run_id == "run-current"
+
+    monkeypatch.setattr(webui, "session_manager", Manager())
+    monkeypatch.setattr(
+        webui,
+        "_invalidate_sessions_state_cache",
+        lambda: invalidations.append(True),
+    )
+
+    response = asyncio.run(
+        webui.clear_session_unread_result("s1", expected_run_id="run-current")
+    )
+    payload = _json_response_payload(response)
+
+    assert calls == [("s1", "run-current")]
+    assert invalidations == [True]
+    assert payload == {"status": "ok", "cleared": True}
 
 
 def test_sessions_state_cache_serves_stale_value_during_one_background_refresh(monkeypatch):

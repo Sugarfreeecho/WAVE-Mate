@@ -549,7 +549,7 @@ def test_frontend_final_waits_for_authoritative_terminal_event():
         "if (runSessionId !== currentSessionId) {", 1
     )[1].split("if (getSessionRunState(runSessionId))", 1)[0]
 
-    assert "function markSessionResultComplete(sessionId, status)" in shared_source
+    assert "function markSessionResultComplete(sessionId, status, runId)" in shared_source
     assert "sessionUnreadComplete.add(sid)" in shared_source
     assert "markRunFinalSeen(runCtx);" in final_handler
     assert "markSessionResultComplete" not in final_handler
@@ -560,6 +560,30 @@ def test_frontend_final_waits_for_authoritative_terminal_event():
     assert "markSessionResultComplete(" in reducer_source
     assert "if (!options.fromQueue) clearSessionUnreadState(submitSessionIdInitial);" in send_setup
     assert "clearSessionUnreadState(runSessionId)" not in foreground_finalizer
+
+
+def test_frontend_open_session_acknowledgement_blocks_stale_unread_snapshots():
+    shared_source = (ROOT / "frontend/src/app/modules/shared-state-and-dialogs.js").read_text(
+        encoding="utf-8"
+    )
+    sessions_source = (ROOT / "frontend/src/app/modules/session-management.js").read_text(
+        encoding="utf-8"
+    )
+    store_source = (ROOT / "frontend/src/app/state/session-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "?expected_run_id=" in shared_source
+    assert "function shouldSuppressSessionUnreadSnapshot(session)" in shared_source
+    assert "sessionUnreadClearInFlight[sid] !== state" in shared_source
+    assert "shouldSuppressSessionUnreadSnapshot(nextSession)" in store_source
+    assert "shouldSuppressSessionUnreadSnapshot(session)" in store_source
+    assert "const appliedSession = sessionStore.get(sess.id) || sess;" in sessions_source
+    assert "var isSelectedSession = String(sessionId) === String(currentSessionId || '')" in sessions_source
+    assert "clearSessionUnreadState(sessionId);\n        return true;" in sessions_source
+    assert "clearSessionUnreadState(sessionId, { expectedRunId: runId })" in (
+        ROOT / "frontend/src/app/state/session-event-reducer.js"
+    ).read_text(encoding="utf-8")
 
 
 def test_frontend_terminal_cleanup_never_creates_empty_process_groups():

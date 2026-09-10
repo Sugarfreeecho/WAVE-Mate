@@ -1854,24 +1854,26 @@ function maybeStartStreamPollForSession(sid, opts) {
     if (!getSessionRunState(sid) && typeof attachSessionEventStream === 'function') {
         void attachSessionEventStream(sid, { skipInitialLoad: !!opts.skipInitialLoad });
     }
-    let pollCount = 0;
-    let MAX_POLL_COUNT = 20;
+    let pollPending = false;
     streamPollTimer = setInterval(function () {
+        if (pollPending) return;
+        pollPending = true;
         (async function () {
+            try {
             if (currentSessionId !== sid) {
                 clearStreamPoll();
                 return;
             }
-            pollCount += 1;
             if (typeof reconcileRunStateFromServer === 'function') {
                 await reconcileRunStateFromServer({ silent: true });
             }
             const still = typeof isServerStreamActive === 'function'
                 ? isServerStreamActive(sid)
                 : isSessionRunning(sid);
-            if (!still || pollCount >= MAX_POLL_COUNT) {
+            if (!still) {
                 clearStreamPoll();
                 await loadSessions();
+                await ensureFinalVisibleAfterRunIfEnabled(sid, null, {});
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
                 return;
@@ -1879,6 +1881,11 @@ function maybeStartStreamPollForSession(sid, opts) {
             if (currentSessionId === sid && document.visibilityState === 'visible') {
                 syncSessionListIndicatorClasses();
                 setSendButtonState();
+            }
+            } catch (error) {
+                console.warn('session stream poll failed:', error);
+            } finally {
+                pollPending = false;
             }
         })();
     }, 15000);

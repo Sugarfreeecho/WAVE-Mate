@@ -127,6 +127,54 @@ def test_active_goal_round_clears_completion_only_at_run_terminal(tmp_path, monk
     assert summary["unread_result"] is False
 
 
+def test_unread_acknowledgement_cannot_clear_a_newer_run(tmp_path):
+    import agent_harness
+
+    session_id = "34343434-3434-4434-8434-343434343434"
+    sessions_dir = tmp_path / "sessions"
+    session_dir = sessions_dir / session_id
+    session_dir.mkdir(parents=True)
+    metadata = {
+        "id": session_id,
+        "name": "run-scoped unread",
+        "created_at": "2026-07-10T00:00:00Z",
+        "updated_at": "2026-07-10T00:00:00Z",
+    }
+    (session_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    index_file = tmp_path / "sessions.json"
+    index_file.write_text(json.dumps({"sessions": [metadata]}), encoding="utf-8")
+    manager = agent_harness.SessionManager(sessions_dir, index_file)
+
+    manager.mark_session_unread_result(session_id, run_id="run-old")
+    manager.mark_session_unread_result(session_id, run_id="run-new")
+
+    reloaded_manager = agent_harness.SessionManager(sessions_dir, index_file)
+    reloaded_unread = reloaded_manager.get_session_summary(session_id)
+    assert reloaded_unread["unread_result"] is True
+    assert reloaded_unread["unread_result_run_id"] == "run-new"
+
+    assert reloaded_manager.clear_session_unread_result(
+        session_id,
+        expected_run_id="run-old",
+    ) is False
+    summary = reloaded_manager.get_session_summary(session_id)
+    assert summary["unread_result"] is True
+    assert summary["unread_result_run_id"] == "run-new"
+
+    assert reloaded_manager.clear_session_unread_result(
+        session_id,
+        expected_run_id="run-new",
+    ) is True
+    summary = reloaded_manager.get_session_summary(session_id)
+    assert summary["unread_result"] is False
+    assert "unread_result_run_id" not in summary
+
+    restarted_manager = agent_harness.SessionManager(sessions_dir, index_file)
+    reloaded_summary = restarted_manager.get_session_summary(session_id)
+    assert reloaded_summary["unread_result"] is False
+    assert "unread_result_run_id" not in reloaded_summary
+
+
 def test_pending_queue_user_turn_preserves_previous_unread_result(tmp_path):
     import agent_harness
 

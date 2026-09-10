@@ -2197,14 +2197,20 @@ def _interrupt_terminal_text(session_id: str, *, parent: bool = False) -> str:
         reason = "unspecified"
     if reason in _EXPLICIT_USER_INTERRUPT_REASONS:
         return "任务已由用户中断（父会话）。" if parent else "任务已由用户中断。"
-    return "任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续。"
+    # 非用户中断不一定是进程停止/重启（连接断开同样会走到这里），文案不得误导归因；
+    # 这类 run 命中 _runtime_v2_auto_resume_pending，服务恢复后确实会自动继续。
+    return "任务因运行中断而暂停，服务恢复后会自动继续；若长时间未恢复，可重新发送消息继续。"
 
 
-def _mark_run_terminal_unread(session_id: str, event_type: str) -> None:
+def _mark_run_terminal_unread(session_id: str, event_type: str, run_id: str = "") -> None:
     """Update result attention only after the durable run terminal commits."""
 
     if event_type != "run_finished":
-        session_manager.mark_session_unread_result(session_id, status="failed")
+        session_manager.mark_session_unread_result(
+            session_id,
+            status="failed",
+            run_id=run_id,
+        )
         return
     try:
         from agent_goal import goal_enabled, manager_for
@@ -2216,7 +2222,11 @@ def _mark_run_terminal_unread(session_id: str, event_type: str) -> None:
     if goal_active:
         session_manager.clear_session_unread_result(session_id)
     else:
-        session_manager.mark_session_unread_result(session_id, status="success")
+        session_manager.mark_session_unread_result(
+            session_id,
+            status="success",
+            run_id=run_id,
+        )
 
 
 def _runtime_v2_commit_user_turn(
@@ -2619,7 +2629,7 @@ async def _finalize_agent_run_lifecycle(
         }
         terminal_payload.setdefault("mode", mode)
         await runtime_lifecycle.commit(terminal_type, terminal_payload)
-        _mark_run_terminal_unread(session_id, terminal_type)
+        _mark_run_terminal_unread(session_id, terminal_type, run_id)
         await emit(terminal_event)
 
         try:
@@ -9479,7 +9489,11 @@ async def astream_events(
                 ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
                 ev2 = {"type": "final", "content": terminal_text}
                 await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
-                _mark_run_terminal_unread(session_id, "run_interrupted")
+                _mark_run_terminal_unread(
+                    session_id,
+                    "run_interrupted",
+                    runtime_v2_run_id,
+                )
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1
@@ -9912,7 +9926,11 @@ async def astream_events_continuation(
                 ev1 = {"type": "status", "content": terminal_text.rstrip("。")}
                 ev2 = {"type": "final", "content": terminal_text}
                 await runtime_lifecycle.commit("run_interrupted", {"reason": reason})
-                _mark_run_terminal_unread(session_id, "run_interrupted")
+                _mark_run_terminal_unread(
+                    session_id,
+                    "run_interrupted",
+                    runtime_v2_run_id,
+                )
                 session_manager.append_ui_event(session_id, ev1)
                 session_manager.append_ui_event(session_id, ev2)
                 yield ev1

@@ -40,6 +40,13 @@ const sessionStore = {
             if (this.isDeletedSessionTombstoned(sid)) continue;
             snapshotIds.add(sid);
             const nextSession = Object.assign({}, s);
+            if (typeof shouldSuppressSessionUnreadSnapshot === 'function'
+                && shouldSuppressSessionUnreadSnapshot(nextSession)) {
+                nextSession.unread_result = false;
+                delete nextSession.unread_result_at;
+                delete nextSession.unread_result_status;
+                delete nextSession.unread_result_run_id;
+            }
             if (typeof isSessionStreamStopSuppressed === 'function' && isSessionStreamStopSuppressed(sid)) {
                 nextSession.stream_active = false;
                 nextSession.run_active = false;
@@ -91,8 +98,17 @@ const sessionStore = {
         if (!session || !session.id) return;
         const sid = String(session.id);
         if (this.isDeletedSessionTombstoned(sid)) return;
+        const nextSession = (
+            typeof shouldSuppressSessionUnreadSnapshot === 'function'
+            && shouldSuppressSessionUnreadSnapshot(session)
+        ) ? Object.assign({}, session, { unread_result: false }) : session;
+        if (nextSession !== session) {
+            delete nextSession.unread_result_at;
+            delete nextSession.unread_result_status;
+            delete nextSession.unread_result_run_id;
+        }
         const existed = this.sessionOrder.indexOf(sid) >= 0;
-        this.sessionsById.set(sid, session);
+        this.sessionsById.set(sid, nextSession);
         if (!existed) {
             this.sessionOrder.unshift(sid);
         }
@@ -100,8 +116,8 @@ const sessionStore = {
         // 否则老会话有了新对话后仍停留在原分组、原位置（仅靠 800ms 后的
         // applySnapshot 兜底，期间 UI 顺序与时间分组不一致）。
         this._reorderSessionOrder();
-        if (Object.prototype.hasOwnProperty.call(session, 'stream_active')) {
-            this.streamActiveById[sid] = !!session.stream_active;
+        if (Object.prototype.hasOwnProperty.call(nextSession, 'stream_active')) {
+            this.streamActiveById[sid] = !!nextSession.stream_active;
         }
     },
 

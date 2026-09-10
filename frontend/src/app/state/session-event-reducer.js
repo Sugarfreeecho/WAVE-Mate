@@ -83,10 +83,14 @@ function applySessionEvent(event, opts) {
             && isGoalActiveForSession(sessionId);
         if (goalContinues && typeof clearSessionUnreadState === 'function') {
             clearSessionUnreadState(sessionId, { server: false });
+        } else if (sessionId === String(currentSessionId || '')
+            && typeof clearSessionUnreadState === 'function') {
+            clearSessionUnreadState(sessionId, { expectedRunId: runId });
         } else {
             markSessionResultComplete(
                 sessionId,
-                (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success'
+                (type === 'run_interrupted' || type === 'run_failed') ? 'failed' : 'success',
+                runId
             );
         }
         return {

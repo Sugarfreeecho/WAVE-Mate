@@ -1,5 +1,7 @@
 var permissionModeBusy = false;
 var currentPermissionStatus = null;
+var newSessionPermissionMode = '';
+var LS_NEW_SESSION_PERMISSION_MODE = 'myagent-new-session-permission-mode';
 var mcpRegistrationPromptBusy = false;
 var mcpRegistrationPrompted = new Set();
 
@@ -13,6 +15,53 @@ function permissionModeLabel(mode) {
     if (mode === 'approve_for_me') return '替我审批';
     if (mode === 'full_access') return '完全访问权限';
     return '请求批准';
+}
+
+function selectedNewSessionPermissionMode() {
+    if (newSessionPermissionMode) return newSessionPermissionMode;
+    try { return String(localStorage.getItem(LS_NEW_SESSION_PERMISSION_MODE) || ''); }
+    catch (e) { return ''; }
+}
+
+function setNewSessionPermissionMode(mode) {
+    newSessionPermissionMode = String(mode || '');
+    try {
+        if (newSessionPermissionMode) localStorage.setItem(LS_NEW_SESSION_PERMISSION_MODE, newSessionPermissionMode);
+        else localStorage.removeItem(LS_NEW_SESSION_PERMISSION_MODE);
+    } catch (e) { /* ignore */ }
+}
+
+function commitNewSessionPermissionMode(status) {
+    var mode = selectedNewSessionPermissionMode();
+    setNewSessionPermissionMode('');
+    if (status) renderPermissionMode(status);
+    return mode;
+}
+
+async function loadNewSessionPermissionStatus() {
+    var urls = ['/api/security/permissions'];
+    if (typeof sessionStore !== 'undefined' && sessionStore && typeof sessionStore.list === 'function') {
+        var existing = sessionStore.list().find(function (session) { return session && session.id; });
+        if (existing) urls.push('/sessions/' + encodeURIComponent(existing.id) + '/permissions');
+    }
+    for (var i = 0; i < urls.length; i += 1) {
+        try {
+            var response = await fetch(urls[i], { cache: 'no-store' });
+            if (!response.ok) continue;
+            var data = await response.json();
+            if (data && data.ok) return data;
+        } catch (e) { /* try the compatibility endpoint */ }
+    }
+    return {
+        ok: true,
+        mode: selectedNewSessionPermissionMode() || 'ask_for_approval',
+        security_enabled: permissionControlsEnabled(null),
+        available_modes: {
+            ask_for_approval: true,
+            approve_for_me: true,
+            full_access: true,
+        },
+    };
 }
 
 function permissionControlsEnabled(status) {
@@ -134,7 +183,7 @@ function renderPermissionMode(status) {
         var mode = status && status.mode;
         triggerIco.innerHTML = PERMISSION_MODE_ICONS[mode] || PERMISSION_MODE_ICONS.ask_for_approval;
     }
-    if (trigger) trigger.disabled = !controlsEnabled || permissionModeBusy || !currentSessionId;
+    if (trigger) trigger.disabled = !controlsEnabled || permissionModeBusy;
     if (!menu) return;
     var available = (status && status.available_modes) || { ask_for_approval: true };
     Array.from(menu.querySelectorAll('[data-permission-mode]')).forEach(function (button) {
@@ -151,7 +200,21 @@ async function refreshPermissionModeSelector(sessionId) {
     var sid = String(sessionId || currentSessionId || '');
     var previousPermissionStatus = currentPermissionStatus;
     if (!sid) {
-        renderPermissionMode(null);
+        if (previousPermissionStatus) {
+            var draftStatus = Object.assign({}, previousPermissionStatus);
+            draftStatus.mode = selectedNewSessionPermissionMode() || draftStatus.mode;
+            renderPermissionMode(draftStatus);
+            return;
+        }
+        try {
+            var globalStatus = await loadNewSessionPermissionStatus();
+            if (!currentSessionId) {
+                globalStatus.mode = selectedNewSessionPermissionMode() || globalStatus.mode;
+                renderPermissionMode(globalStatus);
+            }
+        } catch (error) {
+            if (!currentSessionId) renderPermissionMode(null);
+        }
         return;
     }
     try {
@@ -167,7 +230,7 @@ async function refreshPermissionModeSelector(sessionId) {
 }
 
 async function selectPermissionMode(mode) {
-    if (permissionModeBusy || !currentSessionId) return;
+    if (permissionModeBusy) return;
     if (mode === 'full_access') {
         var accepted = await openUiModal({
             title: '完全访问权限',
@@ -178,6 +241,11 @@ async function selectPermissionMode(mode) {
             cancelText: '取消',
         });
         if (!accepted) return;
+    }
+    if (!currentSessionId) {
+        setNewSessionPermissionMode(mode);
+        renderPermissionMode(Object.assign({}, currentPermissionStatus || {}, { mode: mode }));
+        return;
     }
     permissionModeBusy = true;
     renderPermissionMode(currentPermissionStatus);

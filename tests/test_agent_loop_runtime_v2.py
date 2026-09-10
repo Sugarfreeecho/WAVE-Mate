@@ -1198,7 +1198,7 @@ def test_astream_finishes_while_title_generation_is_still_running(monkeypatch, t
         def set_session_name(self, *args, **kwargs):
             pass
 
-        def mark_session_unread_result(self, session_id, status="success"):
+        def mark_session_unread_result(self, session_id, status="success", run_id=""):
             from runtime_v2.event_log import SessionEventLog
             from runtime_v2.projector import RuntimeProjector
 

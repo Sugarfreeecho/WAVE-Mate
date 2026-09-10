@@ -5,6 +5,31 @@ const modelProfileIdBySession = Object.create(null);
 const modelProfileToggleBusy = Object.create(null);
 let modelProfileSelectionEpoch = 0;
 let activeModelProfileId = '';
+const LS_NEW_SESSION_MODEL_PROFILE = 'myagent-new-session-model-profile';
+
+function newSessionModelProfileId() {
+    var memoryValue = String(modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] || '');
+    if (memoryValue) return memoryValue;
+    try { return String(localStorage.getItem(LS_NEW_SESSION_MODEL_PROFILE) || ''); }
+    catch (e) { return ''; }
+}
+
+function setNewSessionModelProfileId(profileId) {
+    var value = String(profileId || '');
+    if (value) modelProfileIdBySession[NEW_SESSION_DRAFT_KEY] = value;
+    else delete modelProfileIdBySession[NEW_SESSION_DRAFT_KEY];
+    try {
+        if (value) localStorage.setItem(LS_NEW_SESSION_MODEL_PROFILE, value);
+        else localStorage.removeItem(LS_NEW_SESSION_MODEL_PROFILE);
+    } catch (e) { /* ignore */ }
+}
+
+function commitNewSessionModelProfile(sessionId) {
+    var value = newSessionModelProfileId();
+    if (value && sessionId) modelProfileIdBySession[String(sessionId)] = value;
+    setNewSessionModelProfileId('');
+    return value;
+}
 
 function h(str) {
     return String(str == null ? '' : str)
@@ -262,7 +287,7 @@ async function refreshModelProfileSelector(sessionId, opts) {
     if (!opts.silent && e.current) e.current.textContent = '正在加载模型配置';
     try {
         await loadModelProfilesForSwitcher();
-        var selectedProfileId = modelProfileIdBySession[sid]
+        var selectedProfileId = (sid ? modelProfileIdBySession[sid] : newSessionModelProfileId())
             || modelProfilesCache.new_session_default_profile_id
             || '';
         if (sid) {
@@ -304,7 +329,15 @@ function refreshModelProfileSelectorInBackground(sessionId, opts) {
 async function setCurrentSessionModelProfile(profileId) {
     const sid = String(currentSessionId || '');
     const selectedProfileId = String(profileId || '');
-    if (!sid || modelProfileBusyBySession[sid]) return;
+    if (!selectedProfileId) return;
+    if (!sid) {
+        setNewSessionModelProfileId(selectedProfileId);
+        modelProfileSelectionEpoch += 1;
+        activeModelProfileId = selectedProfileId;
+        renderModelProfileControl();
+        return;
+    }
+    if (modelProfileBusyBySession[sid]) return;
     try {
         var __oldId = String(activeModelProfileId || modelProfileIdBySession[sid] || '');
         var __newId = String(selectedProfileId || '');

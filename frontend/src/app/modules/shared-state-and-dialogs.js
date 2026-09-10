@@ -93,8 +93,14 @@ function isMyAgentFeatureEnabled(name, defaultValue) {
 
 function clearSessionUnreadState(sessionId, opts) {
     var sid = String(sessionId || '');
-    if (!sid) return;
+    if (!sid) return Promise.resolve(false);
     opts = opts || {};
+    var sessBeforeClear = typeof sessionStore !== 'undefined' ? sessionStore.get(sid) : null;
+    var expectedRunId = String(
+        opts.expectedRunId
+        || (sessBeforeClear && sessBeforeClear.unread_result_run_id)
+        || ''
+    ).trim();
     sessionUnreadComplete.delete(sid);
     persistSessionUnread();
     if (typeof sessionStore !== 'undefined') {
@@ -103,20 +109,72 @@ function clearSessionUnreadState(sessionId, opts) {
             sess.unread_result = false;
             delete sess.unread_result_at;
             delete sess.unread_result_status;
+            delete sess.unread_result_run_id;
         }
     }
     if (typeof syncSessionListIndicatorClasses === 'function') syncSessionListIndicatorClasses();
-    if (opts.server === false || sessionUnreadClearInFlight[sid]) return;
-    sessionUnreadClearInFlight[sid] = true;
-    fetch('/sessions/' + encodeURIComponent(sid) + '/unread-result/clear', { method: 'POST' })
-        .catch(function () { /* ignore */ })
-        .finally(function () { delete sessionUnreadClearInFlight[sid]; });
+    if (opts.server === false) return Promise.resolve(true);
+    var existingClear = sessionUnreadClearInFlight[sid];
+    if (existingClear) {
+        if (!expectedRunId || existingClear.expectedRunId === expectedRunId) {
+            return existingClear.promise;
+        }
+        delete sessionUnreadClearInFlight[sid];
+    }
+    var state = {
+        expectedRunId: expectedRunId,
+        promise: null,
+    };
+    sessionUnreadClearInFlight[sid] = state;
+    var url = '/sessions/' + encodeURIComponent(sid) + '/unread-result/clear';
+    if (expectedRunId) url += '?expected_run_id=' + encodeURIComponent(expectedRunId);
+    state.promise = fetch(url, { method: 'POST' })
+        .then(function (response) {
+            if (!response.ok) throw new Error('unread clear failed: ' + response.status);
+            return response.json();
+        })
+        .then(function (payload) {
+            if (sessionUnreadClearInFlight[sid] !== state) return false;
+            if (payload && payload.cleared === false && typeof refreshSingleSessionRow === 'function') {
+                delete sessionUnreadClearInFlight[sid];
+                void refreshSingleSessionRow(sid);
+                return false;
+            }
+            // Keep the acknowledgement barrier for this run. Requests that
+            // started before the POST can arrive arbitrarily late; only a
+            // different run id is allowed to create a new unread result.
+            state.acknowledged = true;
+            return true;
+        })
+        .catch(function () {
+            if (sessionUnreadClearInFlight[sid] === state) {
+                delete sessionUnreadClearInFlight[sid];
+                if (typeof refreshSingleSessionRow === 'function') void refreshSingleSessionRow(sid);
+            }
+            return false;
+        });
+    return state.promise;
 }
 
-function markSessionResultComplete(sessionId, status) {
+function shouldSuppressSessionUnreadSnapshot(session) {
+    if (!session || !session.id || !session.unread_result) return false;
+    var sid = String(session.id);
+    var state = sessionUnreadClearInFlight[sid];
+    if (!state) return false;
+    var incomingRunId = String(session.unread_result_run_id || '').trim();
+    if (state.expectedRunId && incomingRunId && state.expectedRunId !== incomingRunId) {
+        delete sessionUnreadClearInFlight[sid];
+        return false;
+    }
+    return true;
+}
+
+function markSessionResultComplete(sessionId, status, runId) {
     var sid = String(sessionId || '');
     if (!sid) return;
     var normalizedStatus = status === 'failed' ? 'failed' : 'success';
+    var resultRunId = String(runId || '').trim();
+    delete sessionUnreadClearInFlight[sid];
     sessionUnreadComplete.add(sid);
     if (typeof sessionStore !== 'undefined') {
         var sess = sessionStore.get(sid);
@@ -124,6 +182,8 @@ function markSessionResultComplete(sessionId, status) {
             sess.unread_result = true;
             sess.unread_result_status = normalizedStatus;
             sess.unread_result_at = new Date().toISOString();
+            if (resultRunId) sess.unread_result_run_id = resultRunId;
+            else delete sess.unread_result_run_id;
         }
     }
     persistSessionUnread();

@@ -247,7 +247,7 @@ Object.assign(UI_TRANSLATIONS_EN, {
     '子任务结果已返回，正在纳入当前回答': 'Subtask results returned; incorporating them into the current response',
     '安全确认': 'Safety confirmation', '用户已允许': 'User allowed', '用户已拒绝执行（已跳过）。': 'User denied execution (skipped).',
     '任务已由用户中断。': 'Task interrupted by the user.', '任务已由用户中断（父会话）。': 'Task interrupted by the user (parent session).',
-    '任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续。': 'The task was paused because the Agent stopped, restarted, or was interrupted; it can continue after the service recovers.',
+    '任务因运行中断而暂停，服务恢复后会自动继续；若长时间未恢复，可重新发送消息继续。': 'The task was paused by an interruption and will resume automatically once the service recovers; if it does not, resend your message to continue.',
     '执行已由 Hook 暂停：': 'Execution paused by a Hook: ', '执行已由 Stop Hook 暂停：': 'Execution paused by a Stop Hook: ',
     '模型未输出最终内容': 'The model did not produce a final response', '检测到连续重复行为': 'Consecutive repeated behavior detected',
     '已插入强制提醒': 'A mandatory reminder was inserted', '已终止任务': 'Task terminated',
@@ -479,7 +479,7 @@ function translateUiString(value) {
         .replace(/^【安全确认】用户已拒绝执行（已跳过）。\s*(.+)$/g, '[Safety confirmation] User denied execution (skipped): $1')
         .replace(/^任务已由用户中断（父会话）$/g, 'Task interrupted by the user (parent session)')
         .replace(/^任务已由用户中断$/g, 'Task interrupted by the user')
-        .replace(/^任务因 Agent 停止、重启或运行中断而暂停，可在服务恢复后继续$/g, 'The task was paused because the Agent stopped, restarted, or was interrupted; it can continue after the service recovers')
+        .replace(/^任务因运行中断而暂停，服务恢复后会自动继续；若长时间未恢复，可重新发送消息继续$/g, 'The task was paused by an interruption and will resume automatically once the service recovers; if it does not, resend your message to continue')
         .replace(/^执行已由 Stop Hook 暂停：(.+)$/g, 'Execution paused by a Stop Hook: $1')
         .replace(/^执行已由 Hook 暂停：(.+)$/g, 'Execution paused by a Hook: $1')
         .replace(/^Stop Hook 在 (\d+) 次检查后仍阻止结束：(.+)$/g, 'Stop Hook still blocked completion after $1 checks: $2')
@@ -688,7 +688,7 @@ function isUiRuntimeFinalText(value) {
     var source = String(value == null ? '' : value).trim();
     if (!source) return false;
     return /^任务已由用户中断(?:（父会话）)?。?$/.test(source)
-        || /^任务因 Agent 停止、重启或运行中断而暂停/.test(source)
+        || /^任务因运行中断而暂停/.test(source)
         || /^执行已由 (?:Hook|Stop Hook) 暂停：/.test(source)
         || /^Stop Hook 在 \d+ 次检查后仍阻止结束：/.test(source)
         || /^检测到连续重复行为，已终止任务。最近输出：/.test(source)
