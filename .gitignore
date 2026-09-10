@@ -75,3 +75,7 @@ frontend/ux-optimization-concept.html
 
 # Local skill enable/disable state (runtime-writable)
 skill_states.json
+
+# Local debugging artifacts (analysis snapshots, Playwright MCP captures)
+.analysis/
+.playwright-mcp/
